@@ -20,8 +20,17 @@
 ; vía tools/png2chr.py, y la disposición en pantalla se compila desde una
 ; definición de metatiles vía tools/build_scene.py — ver el Makefile
 ; (dist/tiles_pradera.s, dist/scene_pradera.s). `reset` solo copia esos
-; bytes ya compilados a VRAM con ppu_copy_bulk. Los sprites siguen
-; apagados (sin contenido de OAM real todavía — eso es F2.3).
+; bytes ya compilados a VRAM con ppu_copy_bulk.
+;
+; F2.3 (sprites): Chiquito (con animación idle/caminar), un enemigo y un
+; coleccionable, generados con el mismo pipeline.
+;
+; F3.1 (controlador): `read_controller1`, llamada una vez por frame
+; desde el main loop, lee el mando 1 vía $4016 y normaliza 3 estados:
+; `pad1` (botones sostenidos ahora), `pad1_prev` (sostenidos el frame
+; anterior) y `pad1_pressed` (bits que pasaron de 0 a 1 este frame — para
+; detectar flancos, no solo "está sostenido"). Todavía no hay nada que
+; reaccione a estos botones (eso es F3.2 en adelante).
 
 ; F2.3 (sprites): protagonista (Chiquito, con 2 frames de animación),
 ; enemigo inicial y coleccionable, también generados vía
@@ -51,6 +60,18 @@ TILE_ITEM          = 8
 ; se ajustará cuando haya colisiones reales que probar.
 PLAYER_HITBOX_W = 8
 PLAYER_HITBOX_H = 8
+
+; Bits del byte normalizado de mando (orden estándar de NES: el primer
+; botón leído -- A -- termina en el bit más alto, por cómo se arma el
+; byte con ROL en read_controller1).
+PAD_A      = %10000000
+PAD_B      = %01000000
+PAD_SELECT = %00100000
+PAD_START  = %00010000
+PAD_UP     = %00001000
+PAD_DOWN   = %00000100
+PAD_LEFT   = %00000010
+PAD_RIGHT  = %00000001
 
 .segment "RODATA"
 ; OAM inicial (3 sprites de prueba): Y, tile, atributos, X.
@@ -89,6 +110,10 @@ pq_addr_lo:  .res 1   ; argumento de ppu_queue_push: byte bajo de la dirección 
 pq_data:     .res 1   ; argumento de ppu_queue_push: byte a escribir
 pbulk_src:   .res 2   ; argumento de ppu_copy_bulk: puntero fuente en ROM (low, high)
 pbulk_len:   .res 2   ; argumento de ppu_copy_bulk: cantidad de bytes a copiar (low, high)
+
+pad1:         .res 1   ; botones del mando 1 sostenidos en este frame
+pad1_prev:    .res 1   ; botones sostenidos en el frame anterior
+pad1_pressed: .res 1   ; botones que pasaron de 0 a 1 este frame (flanco de bajada a presionado)
 
 .segment "BSS"
 ppu_queue_len:       .res 1
@@ -276,6 +301,8 @@ mainloop:
     lda #$00
     sta frame_ready
 
+    jsr read_controller1     ; F3.1: actualiza pad1/pad1_prev/pad1_pressed
+
     ; Animación mínima de Chiquito (F2.3): alterna idle/caminar cada 16
     ; frames usando el bit 4 de frame_count. Es la única "lógica de
     ; juego" de este milestone; el resto llega en Fase 3.
@@ -323,6 +350,37 @@ mainloop:
 
 .proc irq
     rti                     ; placeholder: sin IRQ de mapper programado todavía
+.endproc
+
+; Lee el mando 1 y normaliza su estado. Debe llamarse una vez por frame
+; (desde el main loop, nunca desde nmi). Orden de lectura estándar de
+; NES: A, B, Select, Start, Up, Down, Left, Right -- cada lectura entrega
+; el bit en bit0 de $4016; el primer bit leído (A) termina en el bit más
+; alto del byte final porque cada ROL subsiguiente lo desplaza un lugar
+; más a la izquierda (ver constantes PAD_* arriba).
+.proc read_controller1
+    lda pad1
+    sta pad1_prev
+
+    lda #$01
+    sta $4016               ; strobe alto: el mando recarga su registro de botones
+    lda #$00
+    sta $4016               ; strobe bajo: empieza a entregar un bit por lectura
+
+    ldx #$08
+@loop:
+    lda $4016
+    lsr a                   ; bit0 del mando -> acarreo
+    rol pad1                ; mete el acarreo en pad1 y desplaza el resto a la izquierda
+    dex
+    bne @loop
+
+    ; pad1_pressed = bits que están en 1 ahora pero NO estaban en el frame anterior.
+    lda pad1
+    eor pad1_prev
+    and pad1
+    sta pad1_pressed
+    rts
 .endproc
 
 ; Escribe un byte en VRAM durante el próximo VBlank en vez de hacerlo ahora.

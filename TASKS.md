@@ -214,12 +214,20 @@
 
 # Fase 3 — Control, jugador y físicas
 
-## F3.1 Controlador [P1]
-- [ ] Leer D-pad y botones A/B/Start/Select.
-- [ ] Normalizar estado actual y anterior para detectar pulsaciones.
-- [ ] Probar combinaciones de botones.
+## F3.1 Controlador [P1] — Implementada, compilada, probada en emulador (2026-11-10)
+- [x] Leer D-pad y botones A/B/Start/Select. (`read_controller1`, estrobe + 8 lecturas de `$4016`, orden estándar A/B/Select/Start/Up/Down/Left/Right)
+- [x] Normalizar estado actual y anterior para detectar pulsaciones. (`pad1`, `pad1_prev`, `pad1_pressed` en Zero Page; `pad1_pressed` = flanco 0→1)
+- [x] Probar combinaciones de botones. (A+Right simultáneos, ver registro abajo)
 
 **Aceptación:** entradas consistentes y sin lecturas erráticas.
+
+**Registro de la tarea:**
+- Archivos: `src/main.s` (constantes `PAD_*`, variables `pad1`/`pad1_prev`/`pad1_pressed`, rutina `read_controller1`, llamada desde `mainloop`), `tools/test_controller.lua` (nuevo).
+- Comando de build: `make clean && make rom`.
+- Resultado de compilación: éxito, mismo header/tamaño de ROM.
+- Prueba ejecutada: `fceux --loadlua tools/test_controller.lua dist/chiquito.nes`, usando `joypad.set` de FCEUX para simular entradas reales (no solo revisar que el código "se ve bien").
+- Resultado observado (4 casos, todos `true`): (1) sostener A+Right por primera vez se detecta como pulsación nueva (`pad1=$81`, `pad1_pressed=$81`); (2) sostenerlos 5 frames más ya NO se marca como pulsación nueva (`pad1=$81`, `pad1_pressed=$00`) — confirma que distingue "sostenido" de "recién presionado"; (3) soltar todo limpia ambos a `$00`; (4) presionar un botón distinto (Down) después de soltar se detecta como pulsación nueva (`pad1=$04`, `pad1_pressed=$04`). `RESULT=PASS`.
+- Limitaciones pendientes: solo mando 1 (no se implementó el 2, no hace falta para un juego de un jugador). Nada reacciona todavía a estos botones — eso es F3.2 (movimiento). No probado en hardware real ni con un mando físico (solo input simulado por script).
 
 ## F3.2 Movimiento [P1]
 - [ ] Definir formato de punto fijo.

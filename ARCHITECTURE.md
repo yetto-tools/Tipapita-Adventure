@@ -204,6 +204,13 @@ El color índice 0 de las 4 subpaletas de fondo (`$3F00`, `$3F04`, `$3F08`, `$3F
 - **Bug real corregido:** el guard de "recalcular estado normal" olvidaba excluir `STATE_DEAD`, así que `recompute_normal_state` sobrescribía DEAD de vuelta a FALL en el mismo frame — Chiquito nunca llegaba a reaparecer. Encontrado con traza frame a frame, no a simple vista.
 - **Animaciones sin arte dedicado:** sin tiles propios para salto/caída/ataque/daño/muerte todavía; `@animate` reutiliza idle/caminar como diferenciadores visuales mínimos. Arte real pasa por el mismo pipeline de F2.2/F2.3 cuando esté listo.
 
+### Sistema de mapas (decidido — F4.1, 2026-11-10)
+
+- **Formato de mapa:** texto plano, editable sin tocar Python. Una leyenda (`carácter=NOMBRE_DE_METATILE`) seguida de una línea en blanco y una grilla de 16x15 caracteres (una pantalla completa = un nametable). El carácter `S` es especial: además de su metatile de leyenda, marca el punto de aparición del jugador (exactamente uno por mapa), calculado como `SPAWN_X=columna*16, SPAWN_Y=fila*16+8` (alineado abajo-izquierda dentro de la celda de 16x16, para que el hitbox de 8x8 quede parado justo sobre la celda de abajo).
+- **`tools/map2scene.py`** reemplaza a `tools/build_scene.py` (F2.2/F3.3/F3.4): la definición de metatiles (tiles+paleta+colisión) se mantiene igual, pero la DISPOSICIÓN de la escena ahora viene de un archivo externo (`assets/maps/*.txt`), no de código Python. Migración verificada sin pérdida: el ROM compilado desde el mapa externo es byte-por-byte idéntico al que generaba la escena hardcodeada.
+- **Límite de tamaño:** 1264 bytes de PRG-ROM por mapa sin comprimir (960 tiles + 64 atributos + 240 colisión). ~100 mapas de este tamaño caben en los 128 KB de PRG-ROM sin necesitar compresión. RLE es la técnica estándar de NES para esto si alguna vez hace falta (Fase 8) — no implementada porque no hace falta todavía.
+- **Todavía no es scroll/multi-pantalla:** un mapa sigue siendo una sola pantalla fija (16x15 metatiles). Soporte para niveles más grandes que una pantalla es F4.2 (scrolling) y F4.3 (pantallas y habitaciones).
+
 ## 10. Rendimiento
 
 Prioridades:

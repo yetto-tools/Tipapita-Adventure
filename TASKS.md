@@ -295,14 +295,23 @@
 
 # Fase 4 — Cámara, mapas y escenarios
 
-## F4.1 Sistema de mapas [P1]
-- [ ] Definir formato de mapa.
-- [ ] Definir metatiles y propiedades de colisión.
-- [ ] Crear un mapa de prueba.
-- [ ] Crear herramienta de conversión.
-- [ ] Documentar límites de tamaño y compresión.
+## F4.1 Sistema de mapas [P1] — Implementada, compilada, probada en emulador (2026-11-10)
+- [x] Definir formato de mapa. (texto plano: leyenda `carácter=METATILE` + grilla de 16x15 caracteres; ver `assets/maps/pradera.txt`)
+- [x] Definir metatiles y propiedades de colisión. (ya existían desde F2.2/F3.3 — `METATILES` en `tools/map2scene.py` —, ahora consumidos desde un mapa externo en vez de estar hardcodeados en Python)
+- [x] Crear un mapa de prueba. (`assets/maps/pradera.txt`, migración exacta de la escena de F2.2-F3.4)
+- [x] Crear herramienta de conversión. (`tools/map2scene.py`, reemplaza a `tools/build_scene.py`)
+- [x] Documentar límites de tamaño y compresión. (ver docstring de `map2scene.py` y registro abajo)
 
 **Aceptación:** mapa de fuente externa integrado correctamente en ROM.
+
+**Registro de la tarea:**
+- Archivos: `assets/maps/pradera.txt` (nuevo, asset fuente real), `tools/map2scene.py` (nuevo, reemplaza `tools/build_scene.py` que se elimina), `tools/test_map2scene.py` (nuevo), `Makefile` (regla actualizada para `map2scene.py` + el mapa de texto como dependencia).
+- Comando de build: `make clean && make rom`.
+- Resultado de compilación: éxito. **El ROM resultante es byte-por-byte idéntico al de antes de esta tarea** (mismo SHA-256) — confirma que migrar de escena-hardcodeada-en-Python a mapa-de-archivo-externo no cambió ningún comportamiento, solo la fuente de los datos.
+- Prueba ejecutada: `python3 tools/test_map2scene.py` (prueba de la herramienta de conversión en sí, no de la ROM — es una herramienta de tiempo de build, igual que `png2chr.py`), más el barrido completo de las 7 pruebas de FCEUX existentes sobre la ROM ya migrada.
+- Resultado observado: 15/15 verificaciones de `test_map2scene.py` (spawn y colisión del mapa real; un **mapa distinto** creado en la prueba, con otra disposición y otro punto de aparición, se convierte correctamente — confirma que el conversor es genérico y no solo "funciona con el mapa que ya teníamos"; 4 casos de error — columnas de menos, sin punto de aparición, dos puntos de aparición, carácter sin definir — fallan con un mensaje claro). Las 7 pruebas de FCEUX (`test_palette`, `test_tiles`, `test_sprites`, `test_controller`, `test_movement`, `test_collision`, `test_state_machine`) siguen pasando sobre la ROM migrada. `RESULT=PASS` en ambas.
+- **Límites de tamaño y compresión (documentado):** un mapa = una pantalla completa de 16x15 metatiles = un nametable (32x30 tiles) = 1264 bytes de PRG-ROM sin comprimir (960 tiles + 64 atributos + 240 colisión). Con 128 KB de PRG-ROM, caben ~100 mapas de este tamaño sin necesitar comprimir nada. Si el contenido completo (Fase 8) se acerca a ese límite, RLE es la técnica estándar de NES para esto — no se implementa todavía porque no hace falta. Mapas más grandes que una pantalla (scroll, carga progresiva) son trabajo de F4.2/F4.3, no de este formato.
+- Limitaciones pendientes: el formato de mapa sigue siendo "una pantalla = un nametable completo", sin soporte para mapas más grandes ni carga progresiva (F4.2/F4.3). Solo hay un mapa de prueba real (`pradera.txt`); el mapa alterno de la prueba es sintético, generado en memoria, no un asset del juego. No probado en hardware real.
 
 ## F4.2 Scrolling [P1]
 - [ ] Implementar coordenadas de mundo.

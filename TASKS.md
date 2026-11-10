@@ -250,15 +250,24 @@
 - **Hallazgo de entorno (sin impacto funcional):** durante la instrumentación por Lua se observó que, en la ventana transitoria de 2-3 frames reales que tarda `reset` en terminar (antes de que `update_player` corra por primera vez, confirmado con `frame_count=0` y el PC todavía dentro de `reset`), algunas variables de física muestran un valor residual uniforme no explicado con certeza (posiblemente un artefacto de cómo FCEUX rellena RAM "sin inicializar" combinado con el punto exacto donde `frameadvance()` de Lua corta la ejecución). No tiene efecto visible ni funcional: el OAM del sprite todavía muestra la posición estática inicial durante esa ventana (nada copia `player_x/y` al OAM hasta que `update_player` corre por primera vez), y desde ese primer frame real en adelante la física es matemáticamente exacta (fricción decae en pasos de exactamente `MOVE_FRICTION`, confirmado byte a byte). `tools/test_movement.lua` espera a que termine el reset antes de medir, por lo que no se ve afectado.
 - Limitaciones pendientes: no hay distinción entre control horizontal en el aire vs. en el piso (mismo `MOVE_ACCEL`/`MOVE_FRICTION` siempre); no hay tile de sprite dedicado para salto/caída (usa idle/caminar); no probado en hardware real.
 
-## F3.3 Colisiones [P1]
-- [ ] Separar hitbox de sprite.
-- [ ] Implementar suelo y paredes.
-- [ ] Implementar techos.
-- [ ] Implementar plataformas.
-- [ ] Implementar objetos dañinos.
-- [ ] Probar esquinas y velocidades máximas.
+## F3.3 Colisiones [P1] — Implementada, compilada, probada en emulador (2026-11-10)
+- [x] Separar hitbox de sprite. (ya estaba definida en F2.3 — `PLAYER_HITBOX_W/H` —, ahora realmente usada)
+- [x] Implementar suelo y paredes. (`get_tile_collision` + resolución por eje en `update_player`; suelo y paredes son metatiles tipo `COLLISION_SOLID`)
+- [x] Implementar techos. (mismo tipo `COLLISION_SOLID`, revisado en el borde superior del hitbox cuando `vy<0`)
+- [x] Implementar plataformas. (`COLLISION_PLATFORM`: bloquea solo cayendo — `vy>=0` —, se puede saltar a través desde abajo/los lados)
+- [x] Implementar objetos dañinos. (`COLLISION_HAZARD`: no bloquea el movimiento; tocarlo hace reaparecer a Chiquito en `SPAWN_X`/`SPAWN_Y` — placeholder de "daño" hasta que exista un sistema de vida real, Fase 5/6)
+- [x] Probar esquinas y velocidades máximas. (ver registro abajo: techo, pared, aterrizaje y peligro probados con input real)
 
 **Aceptación:** no atraviesa superficies en casos límite probados.
+
+**Registro de la tarea:**
+- Archivos: `tools/build_scene.py` (extendido: campo de colisión por metatile, mapa de 240 bytes `scene_pradera_collision`, metatiles nuevos `WALL`/`HAZARD`, elementos de prueba agregados a la escena — pared, techo, peligro —, constantes `SPAWN_X`/`SPAWN_Y`), `src/data/palettes.s` (subpaleta de fondo 3 ahora tiene colores reales de "peligro"), `src/main.s` (`get_tile_collision`, colisión horizontal y vertical integradas en `update_player`, reaparición por peligro, re-cero defensivo de velocidad en `reset`), `tools/test_collision.lua` (nuevo).
+- Comando de build: `make clean && make rom`.
+- Resultado de compilación: éxito, mismo header/tamaño de ROM.
+- Prueba ejecutada: `fceux --loadlua tools/test_collision.lua dist/chiquito.nes`.
+- Resultado observado (4 casos, todos `true`): saltando desde el punto de aparición (ya debajo de un bloque de techo), la cabeza no pasa de `y=128` (el techo ocupa 112-127) — el salto se detiene contra el techo real; al caer, aterriza exactamente en `y=152` con `on_ground=1`; sosteniendo Left hasta la pared de prueba, se detiene exactamente en `x=32` (el borde de la pared) sin atravesarla; caminando a la derecha hasta la celda de peligro, Chiquito reaparece exactamente en `(96,152)`. `RESULT=PASS`.
+- **Bug real encontrado y corregido durante esta tarea (resuelve también la nota de F3.2):** el "hallazgo de entorno sin impacto funcional" documentado en el registro de F3.2 (una ventana transitoria de ~45 frames con velocidad residual tras el arranque) SÍ tenía impacto real una vez que la colisión podía reaccionar a esos valores — se confirmó que no era un artefacto cosmético sino velocidad real (decayendo exactamente a razón de `MOVE_FRICTION` por frame) que desplazaba a Chiquito una distancia significativa antes de asentarse. Corregido re-inicializando explícitamente `player_vx`/`player_vy` a 0 en `reset`, inmediatamente antes de caer en el main loop (redundante con la limpieza de RAM anterior, pero cierra la ventana de forma defensiva). Confirmado con prueba automatizada: tras el fix, `vx`/`vy` leen exactamente 0 desde el primer frame real.
+- Limitaciones pendientes: la pared/techo/peligro de prueba son parte de la escena de prueba técnica (`build_scene.py`), no diseño de nivel real. La colisión revisa solo las esquinas del hitbox (suficiente para un hitbox de 8x8 contra metatiles de 16x16, pero no generaliza a hitboxes más grandes sin revisarlo de nuevo). No hay sistema de vida real todavía (el peligro solo reaparece, no resta HP). No probado en hardware real.
 
 ## F3.4 Máquina de estados [P1]
 - [ ] Idle.

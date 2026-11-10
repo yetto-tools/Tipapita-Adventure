@@ -186,6 +186,15 @@ El color índice 0 de las 4 subpaletas de fondo (`$3F00`, `$3F04`, `$3F08`, `$3F
 - **Parámetros de física** (ajustables sin tocar lógica): `MOVE_ACCEL`, `MOVE_FRICTION`, `MOVE_MAX_SPEED`, `GRAVITY`, `MAX_FALL_SPEED`, `JUMP_VELOCITY`, `JUMP_CUT_SPEED_NEG` — todos en `src/main.s`, documentados con su valor en px/frame o px/frame².
 - **Salto variable:** soltar A mientras `vy` es más negativo que `JUMP_CUT_SPEED_NEG` lo recorta a ese valor — confirmado por prueba automatizada que un salto corto alcanza menos altura que uno largo.
 
+### Colisión contra tiles (decidido — F3.3, 2026-11-10)
+
+- **Tipo de colisión por metatile**, no por tile individual: cada metatile de `scene_pradera` (16x16px) tiene un byte de tipo en `scene_pradera_collision` (generado por `tools/build_scene.py`): `0`=vacío, `1`=sólido (bloquea en cualquier dirección), `2`=plataforma de un solo sentido (bloquea solo cayendo, `vy>=0`), `3`=peligro (no bloquea; hace reaparecer en `SPAWN_X`/`SPAWN_Y`).
+- **Consulta:** `get_tile_collision` resuelve el metatile que contiene un punto de píxel dado. Como cada metatile mide 16px, `índice = (y AND $F0) + (x >> 4)` — enmascarar el nibble alto de `y` da directamente `fila*16`, sin necesitar desplazar y volver a multiplicar.
+- **Resolución por eje:** `update_player` mueve primero en X y resuelve colisión horizontal (solo `COLLISION_SOLID` bloquea), luego mueve en Y y resuelve verticalmente (suelo/plataforma si `vy>=0`, techo —solo sólido— si `vy<0`). Revisar un eje a la vez, después de aplicar su propia velocidad, es el patrón estándar para hitboxes pequeños relativos al tamaño de tile (evita necesitar barrido continuo/swept collision).
+- **Esquinas revisadas:** con hitbox de 8x8 y metatiles de 16x16, revisar las 2 esquinas relevantes por eje (o las 4 para peligro) es suficiente — el hitbox nunca puede abarcar más de 2 metatiles por eje.
+- **Peligro = placeholder de daño:** no hay sistema de vida todavía (Fase 5/6); tocar un metatile de peligro simplemente reaparece a Chiquito en el punto de inicio de la escena.
+- **Hallazgo real corregido:** la velocidad residual transitoria documentada como "sin impacto" en F3.2 sí tenía impacto real combinada con colisión (desplazaba a Chiquito una distancia significativa antes de asentarse). Corregido re-inicializando `player_vx`/`player_vy` a 0 explícitamente en `reset`, justo antes del main loop.
+
 ## 10. Rendimiento
 
 Prioridades:

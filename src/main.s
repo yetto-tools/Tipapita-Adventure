@@ -46,9 +46,19 @@
 ; (byte alto = píxeles enteros, byte bajo = fracción; 256 = 1 píxel).
 ; `update_player` aplica aceleración/fricción horizontal, gravedad y
 ; salto (con corte de salto variable: soltar A temprano reduce la
-; altura). Usa un **piso temporal fijo** (`GROUND_Y`) en vez de colisión
-; real contra tiles — eso es F3.3. La animación idle/caminar ahora
-; depende de la velocidad real, ya no es un parpadeo por tiempo fijo.
+; altura). La animación idle/caminar depende de la velocidad real.
+;
+; F3.3 (colisiones): reemplaza el piso temporal fijo de F3.2 por
+; colisión real contra el mapa de metatiles de la escena
+; (`scene_pradera_collision`, generado por tools/build_scene.py). Cada
+; metatile tiene un tipo (vacío/sólido/plataforma de un sentido/peligro);
+; `get_tile_collision` resuelve qué tipo hay en un punto dado, y
+; `update_player` revisa las esquinas del hitbox del jugador por eje
+; (horizontal primero, luego vertical) después de aplicar la velocidad.
+; Las plataformas solo bloquean cayendo (vy>=0); los peligros no
+; bloquean el movimiento, pero hacen reaparecer a Chiquito en
+; (SPAWN_X,SPAWN_Y) -- es un placeholder de "daño" hasta que exista un
+; sistema de vida real (Fase 5/6), documentado como tal.
 
 .include "data/palettes.s"
 .include "../dist/tiles_pradera.s"
@@ -62,15 +72,11 @@ TILE_CHIQUITO_WALK = 6
 TILE_ENEMY         = 7
 TILE_ITEM          = 8
 
-; Hitbox del jugador (F2.3: solo definida, todavía sin usar -- la
-; colisión real es F3.3). Un sprite de 8x8 completo, sin margen todavía;
-; se ajustará cuando haya colisiones reales que probar.
+; Hitbox del jugador (definida en F2.3, usada desde F3.3). Un sprite de
+; 8x8 completo, sin margen todavía.
 PLAYER_HITBOX_W = 8
 PLAYER_HITBOX_H = 8
 
-; Bits del byte normalizado de mando (orden estándar de NES: el primer
-; botón leído -- A -- termina en el bit más alto, por cómo se arma el
-; byte con ROL en read_controller1).
 ; Física del jugador (F3.2), en punto fijo 8.8 (ver nota arriba sobre el
 ; formato). Valores elegidos para que el movimiento se sienta ágil pero
 ; controlable; se ajustan por parámetro, sin tocar la lógica.
@@ -82,7 +88,13 @@ GRAVITY             = $0020   ; ~0.125 px/frame² hacia abajo
 MAX_FALL_SPEED      = $0400   ; 4.0 px/frame, velocidad terminal de caída
 JUMP_VELOCITY       = $FC00   ; -4.0 px/frame (impulso inicial del salto)
 JUMP_CUT_SPEED_NEG  = $FE00   ; -2.0 px/frame: tope al soltar A mientras sube
-GROUND_Y            = 179     ; piso TEMPORAL (ver nota F3.2); no es colisión real
+
+; Tipos de colisión por metatile (F3.3; ver tools/build_scene.py, que
+; genera scene_pradera_collision con estos mismos valores).
+COLLISION_EMPTY    = 0
+COLLISION_SOLID    = 1
+COLLISION_PLATFORM = 2
+COLLISION_HAZARD   = 3
 
 ; Bits del byte normalizado de mando (orden estándar de NES: el primer
 ; botón leído -- A -- termina en el bit más alto, por cómo se arma el
@@ -100,9 +112,9 @@ PAD_RIGHT  = %00000001
 ; OAM inicial (3 sprites de prueba): Y, tile, atributos, X.
 ; Atributos bits0-1 = subpaleta de sprite (0=jugador,1=enemigo,2=ítem).
 oam_init_data:
-    .byte 179, TILE_CHIQUITO_IDLE, %00000000, 100   ; Chiquito
-    .byte 179, TILE_ENEMY,         %00000001, 180   ; enemigo
-    .byte  99, TILE_ITEM,          %00000010, 140   ; coleccionable
+    .byte SPAWN_Y, TILE_CHIQUITO_IDLE, %00000000, SPAWN_X   ; Chiquito
+    .byte 179,     TILE_ENEMY,         %00000001, 180       ; enemigo
+    .byte 99,      TILE_ITEM,          %00000010, 140       ; coleccionable
 
 .segment "RODATA"
 ; R0,R1: ventanas CHR de 2KB -> banco 0. R2-R5: ventanas CHR de 1KB -> banco 0.
@@ -147,7 +159,7 @@ player_vx_lo: .res 1
 player_vx_hi: .res 1
 player_vy_lo: .res 1
 player_vy_hi: .res 1
-player_on_ground:    .res 1   ; 1 = parado sobre el piso temporal
+player_on_ground:    .res 1   ; 1 = parado sobre suelo/plataforma sólida
 player_facing_right: .res 1   ; 1 = mirando a la derecha (para el flip del sprite)
 
 ; Escratch para cmp16_signed: no deben usarse para nada más.
@@ -155,6 +167,12 @@ cmp_a_lo: .res 1
 cmp_a_hi: .res 1
 cmp_b_lo: .res 1
 cmp_b_hi: .res 1
+
+; Argumentos/escratch de get_tile_collision (F3.3): no deben usarse para
+; nada más mientras se está resolviendo una consulta de colisión.
+col_x:   .res 1
+col_y:   .res 1
+col_tmp: .res 1
 
 .segment "BSS"
 ppu_queue_len:       .res 1
@@ -264,16 +282,29 @@ oam_buffer: .res 256  ; página $0200-$02FF, fuente de la OAM DMA ($4014)
     cpx #12
     bne @oam_copy
 
-    ; F3.2: posición/estado inicial de Chiquito, en punto fijo 8.8.
+    ; F3.2/F3.3: posición/estado inicial de Chiquito, en punto fijo 8.8.
     ; Coincide con la posición estática que se acaba de copiar al OAM
-    ; (Y=179=GROUND_Y, X=100), para que el primer frame no "salte".
-    lda #100
+    ; (SPAWN_Y/SPAWN_X, el punto de reaparición definido en la escena),
+    ; para que el primer frame no "salte".
+    lda #SPAWN_X
     sta player_x_hi
-    lda #GROUND_Y
+    lda #SPAWN_Y
     sta player_y_hi
     lda #1
     sta player_on_ground
     sta player_facing_right
+    ; Re-cero defensivo de posición fraccional y velocidad: ya deberían
+    ; estar en 0 por la limpieza de RAM de arriba, pero se deja explícito
+    ; aquí (inmediatamente antes de que arranque el main loop) para no
+    ; depender de esa limpieza si el código de más arriba cambia alguna
+    ; vez de orden.
+    lda #0
+    sta player_x_lo
+    sta player_y_lo
+    sta player_vx_lo
+    sta player_vx_hi
+    sta player_vy_lo
+    sta player_vy_hi
 
     ; Segundo VBlank: la PPU ya está estable para recibir escrituras seguras.
 @vblankwait2:
@@ -439,14 +470,44 @@ mainloop:
     rts
 .endproc
 
-; Física y animación de Chiquito (F3.2). Llamada una vez por frame desde
-; el main loop, después de read_controller1. Orden:
+; Devuelve en A el tipo de colisión (COLLISION_*) del metatile que
+; contiene el punto de píxel (col_x, col_y). Metatiles de 16x16px en una
+; grilla de 16 columnas; índice = fila*16 + columna. Como fila*16 es
+; exactamente "quedarse con el nibble alto de col_y" (enmascarar con
+; $F0), no hace falta desplazar col_y y luego multiplicar por separado.
+.proc get_tile_collision
+    lda col_y
+    and #$F0                 ; = fila * 16
+    sta col_tmp
+    lda col_x
+    lsr a
+    lsr a
+    lsr a
+    lsr a                    ; = columna (0-15)
+    clc
+    adc col_tmp
+    tax
+    lda scene_pradera_collision,x
+    rts
+.endproc
+
+; Física, colisión y animación de Chiquito (F3.2/F3.3). Llamada una vez
+; por frame desde el main loop, después de read_controller1. Orden:
 ;   1) Horizontal: acelera con input, frena con fricción si no hay input.
 ;   2) Aplica velocidad horizontal a la posición.
-;   3) Vertical: gravedad, inicio de salto, corte de salto variable.
-;   4) Aplica velocidad vertical a la posición; aterriza en GROUND_Y
-;      (piso TEMPORAL -- no es colisión real contra tiles, eso es F3.3).
-;   5) Anima (idle/caminar según velocidad real) y actualiza el OAM.
+;   3) Colisión horizontal: si una esquina del hitbox cae sobre un
+;      metatile sólido en la dirección de movimiento, encajar contra esa
+;      pared y poner vx en 0.
+;   4) Vertical: gravedad, inicio de salto, corte de salto variable.
+;   5) Aplica velocidad vertical a la posición.
+;   6) Colisión vertical: suelo/plataforma si cae (vy>=0, las
+;      plataformas solo bloquean en este caso -- de un solo sentido),
+;      techo si sube (vy<0, solo tiles sólidos). Si no hay nada debajo,
+;      limpia player_on_ground (caerse de un borde).
+;   7) Peligro: si alguna esquina del hitbox toca un metatile de
+;      peligro, reaparece en (SPAWN_X, SPAWN_Y) -- placeholder de daño
+;      hasta que exista un sistema de vida real (Fase 5/6).
+;   8) Anima (idle/caminar según velocidad real) y actualiza el OAM.
 .proc update_player
     lda pad1
     and #PAD_RIGHT
@@ -551,6 +612,68 @@ mainloop:
     adc player_vx_hi
     sta player_x_hi
 
+    ; --- Colisión horizontal (F3.3): solo sólido bloquea; plataformas y
+    ; peligros no detienen el movimiento lateral. ---
+    lda player_vx_lo
+    ora player_vx_hi
+    beq @hcol_done           ; vx == 0: no se movió, nada que resolver
+    lda player_vx_hi
+    bmi @hcol_left
+
+@hcol_right:
+    lda player_x_hi
+    clc
+    adc #PLAYER_HITBOX_W
+    sta col_x
+    lda player_y_hi
+    sta col_y
+    jsr get_tile_collision
+    cmp #COLLISION_SOLID
+    beq @hcol_right_hit
+    lda player_y_hi
+    clc
+    adc #(PLAYER_HITBOX_H-1)
+    sta col_y
+    jsr get_tile_collision   ; col_x sigue siendo el borde derecho de arriba
+    cmp #COLLISION_SOLID
+    bne @hcol_done
+@hcol_right_hit:
+    lda col_x
+    and #$F0                 ; borde izquierdo del tile golpeado
+    sec
+    sbc #PLAYER_HITBOX_W
+    sta player_x_hi
+    lda #0
+    sta player_vx_lo
+    sta player_vx_hi
+    jmp @hcol_done
+
+@hcol_left:
+    lda player_x_hi
+    sta col_x
+    lda player_y_hi
+    sta col_y
+    jsr get_tile_collision
+    cmp #COLLISION_SOLID
+    beq @hcol_left_hit
+    lda player_y_hi
+    clc
+    adc #(PLAYER_HITBOX_H-1)
+    sta col_y
+    jsr get_tile_collision   ; col_x sigue siendo el borde izquierdo de arriba
+    cmp #COLLISION_SOLID
+    bne @hcol_done
+@hcol_left_hit:
+    lda col_x
+    and #$F0
+    clc
+    adc #16                  ; borde derecho del tile golpeado
+    sta player_x_hi
+    lda #0
+    sta player_vx_lo
+    sta player_vx_hi
+@hcol_done:
+
     ; --- Vertical: gravedad ---
     clc
     lda player_vy_lo
@@ -616,14 +739,126 @@ mainloop:
     adc player_vy_hi
     sta player_y_hi
 
-    ; Piso temporal (F3.2; colisión real contra tiles es F3.3).
+    ; --- Colisión vertical (F3.3) ---
+    lda player_vy_hi
+    bmi @vcol_ceiling
+
+@vcol_floor:
+    ; Cayendo (vy>=0): sólido o plataforma bloquean por abajo. Las
+    ; plataformas son de un solo sentido -- solo cuentan aquí porque ya
+    ; se sabe que se está cayendo, no subiendo.
+    lda player_x_hi
+    sta col_x
     lda player_y_hi
-    cmp #GROUND_Y
-    bcc @animate             ; todavía arriba del piso
-    lda #GROUND_Y
+    clc
+    adc #PLAYER_HITBOX_H
+    sta col_y
+    jsr get_tile_collision
+    cmp #COLLISION_SOLID
+    beq @vcol_floor_hit
+    cmp #COLLISION_PLATFORM
+    beq @vcol_floor_hit
+    lda player_x_hi
+    clc
+    adc #(PLAYER_HITBOX_W-1)
+    sta col_x
+    jsr get_tile_collision   ; col_y sigue siendo el borde inferior
+    cmp #COLLISION_SOLID
+    beq @vcol_floor_hit
+    cmp #COLLISION_PLATFORM
+    beq @vcol_floor_hit
+    ; ninguna esquina tocó suelo/plataforma: cayendo en el aire (incluye
+    ; el caso de caminar fuera de un borde).
+    lda #0
+    sta player_on_ground
+    jmp @vcol_done
+@vcol_floor_hit:
+    lda col_y
+    and #$F0
+    sec
+    sbc #PLAYER_HITBOX_H
     sta player_y_hi
     lda #0
     sta player_y_lo
+    sta player_vy_lo
+    sta player_vy_hi
+    lda #1
+    sta player_on_ground
+    jmp @vcol_done
+
+@vcol_ceiling:
+    ; Subiendo (vy<0): solo sólido bloquea por arriba (las plataformas no
+    ; detienen desde abajo -- se puede saltar a través de ellas).
+    lda player_x_hi
+    sta col_x
+    lda player_y_hi
+    sta col_y
+    jsr get_tile_collision
+    cmp #COLLISION_SOLID
+    beq @vcol_ceiling_hit
+    lda player_x_hi
+    clc
+    adc #(PLAYER_HITBOX_W-1)
+    sta col_x
+    jsr get_tile_collision   ; col_y sigue siendo el borde superior
+    cmp #COLLISION_SOLID
+    bne @vcol_done
+@vcol_ceiling_hit:
+    lda col_y
+    and #$F0
+    clc
+    adc #16
+    sta player_y_hi
+    lda #0
+    sta player_y_lo
+    sta player_vy_lo
+    sta player_vy_hi
+
+@vcol_done:
+    ; --- Peligro (F3.3): revisa las 4 esquinas del hitbox. No bloquea el
+    ; movimiento; si toca, Chiquito reaparece en el punto de inicio --
+    ; placeholder de "daño" hasta que exista un sistema de vida real
+    ; (Fase 5/6). ---
+    lda player_x_hi
+    sta col_x
+    lda player_y_hi
+    sta col_y
+    jsr get_tile_collision
+    cmp #COLLISION_HAZARD
+    beq @hazard_hit
+
+    lda player_x_hi
+    clc
+    adc #(PLAYER_HITBOX_W-1)
+    sta col_x
+    jsr get_tile_collision   ; col_y sigue siendo el borde superior
+    cmp #COLLISION_HAZARD
+    beq @hazard_hit
+
+    lda player_y_hi
+    clc
+    adc #(PLAYER_HITBOX_H-1)
+    sta col_y
+    jsr get_tile_collision   ; col_x sigue siendo el borde derecho
+    cmp #COLLISION_HAZARD
+    beq @hazard_hit
+
+    lda player_x_hi
+    sta col_x
+    jsr get_tile_collision   ; col_y sigue siendo el borde inferior
+    cmp #COLLISION_HAZARD
+    bne @animate
+
+@hazard_hit:
+    lda #SPAWN_X
+    sta player_x_hi
+    lda #SPAWN_Y
+    sta player_y_hi
+    lda #0
+    sta player_x_lo
+    sta player_y_lo
+    sta player_vx_lo
+    sta player_vx_hi
     sta player_vy_lo
     sta player_vy_hi
     lda #1

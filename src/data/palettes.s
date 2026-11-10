@@ -19,7 +19,7 @@ palette_table:
     .byte $0F, $22, $20, $0F   ; 0: cielo — índice 1 = azul cielo, índice 2 = blanco
     .byte $0F, $29, $19, $17   ; 1: pradera — índice 1 = verde, índice 2 = verde claro, índice 3 = marrón
     .byte $0F, $17, $07, $09   ; 2: tierra/cueva — índice 1 = marrón, índice 2 = marrón oscuro, índice 3 = oliva
-    .byte $0F, $0F, $0F, $0F   ; 3: sin usar todavía
+    .byte $0F, $16, $06, $26   ; 3: peligro (F3.3) — índice 1 = rojo-marrón, índice 2 = rojo oscuro, índice 3 = rosado
 
     ; Sprites (4 subpaletas x 4 bytes). El color 0 de cada subpaleta de
     ; sprite es transparente en el hardware sin importar su valor; se deja

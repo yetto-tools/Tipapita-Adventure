@@ -16,6 +16,7 @@ LST := $(BUILD_DIR)/main.lst
 # incluye desde $(BUILD_DIR), así que deben existir antes de ensamblar.
 TILES_PRADERA := $(BUILD_DIR)/tiles_pradera.s
 SCENE_PRADERA := $(BUILD_DIR)/scene_pradera.s
+TILES_SPRITES := $(BUILD_DIR)/tiles_sprites.s
 
 .PHONY: all rom check clean run
 
@@ -32,7 +33,10 @@ $(TILES_PRADERA): assets/tiles/pradera.png tools/png2chr.py | $(BUILD_DIR)
 $(SCENE_PRADERA): tools/build_scene.py | $(BUILD_DIR)
 	$(PYTHON) tools/build_scene.py $(SCENE_PRADERA)
 
-$(OBJ): $(SRC_DIR)/main.s $(TILES_PRADERA) $(SCENE_PRADERA) | $(BUILD_DIR)
+$(TILES_SPRITES): assets/sprites/chiquito_test.png tools/png2chr.py | $(BUILD_DIR)
+	$(PYTHON) tools/png2chr.py assets/sprites/chiquito_test.png $(TILES_SPRITES) --label tiles_sprites
+
+$(OBJ): $(SRC_DIR)/main.s $(TILES_PRADERA) $(SCENE_PRADERA) $(TILES_SPRITES) | $(BUILD_DIR)
 	$(CA65) -g -l $(LST) -o $(OBJ) $(SRC_DIR)/main.s
 
 $(ROM): $(OBJ) $(LINKER_CFG)

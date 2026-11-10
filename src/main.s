@@ -23,9 +23,42 @@
 ; bytes ya compilados a VRAM con ppu_copy_bulk. Los sprites siguen
 ; apagados (sin contenido de OAM real todavía — eso es F2.3).
 
+; F2.3 (sprites): protagonista (Chiquito, con 2 frames de animación),
+; enemigo inicial y coleccionable, también generados vía
+; tools/png2chr.py (assets/sprites/chiquito_test.png — igual de
+; placeholder técnico que los tiles de pradera). Se agregan al mismo
+; segmento CHARS, justo después de los tiles de fondo, por lo que
+; terminan físicamente en los mismos bancos que R0-R5 ya exponen (ver
+; nota de mmc3_init_values): hoy pattern table 0 y pattern table 1
+; muestran los mismos bytes físicos de CHR-ROM porque ningún registro de
+; banco cambia todavía. Por eso los tiles de sprite, índices 5-8, caen
+; justo después de los 5 tiles de fondo (índices 0-4).
+
 .include "data/palettes.s"
 .include "../dist/tiles_pradera.s"
 .include "../dist/scene_pradera.s"
+.include "../dist/tiles_sprites.s"
+
+; Índices de tile de sprite (dentro de tiles_sprites, offset +5 porque
+; van después de los 5 tiles de fondo en el mismo CHR-ROM).
+TILE_CHIQUITO_IDLE = 5
+TILE_CHIQUITO_WALK = 6
+TILE_ENEMY         = 7
+TILE_ITEM          = 8
+
+; Hitbox del jugador (F2.3: solo definida, todavía sin usar -- la
+; colisión real es F3.3). Un sprite de 8x8 completo, sin margen todavía;
+; se ajustará cuando haya colisiones reales que probar.
+PLAYER_HITBOX_W = 8
+PLAYER_HITBOX_H = 8
+
+.segment "RODATA"
+; OAM inicial (3 sprites de prueba): Y, tile, atributos, X.
+; Atributos bits0-1 = subpaleta de sprite (0=jugador,1=enemigo,2=ítem).
+oam_init_data:
+    .byte 179, TILE_CHIQUITO_IDLE, %00000000, 100   ; Chiquito
+    .byte 179, TILE_ENEMY,         %00000001, 180   ; enemigo
+    .byte  99, TILE_ITEM,          %00000010, 140   ; coleccionable
 
 .segment "RODATA"
 ; R0,R1: ventanas CHR de 2KB -> banco 0. R2-R5: ventanas CHR de 1KB -> banco 0.
@@ -144,6 +177,27 @@ oam_buffer: .res 256  ; página $0200-$02FF, fuente de la OAM DMA ($4014)
     inx
     bne @clearmem
 
+    ; Llena el buffer de sombra de OAM con $FF (Y=$FF deja cualquier
+    ; sprite fuera de la pantalla visible) antes de escribir los sprites
+    ; reales. Sin esto, los sprites 3-63 (sin usar) quedarían en Y=0 tras
+    ; la limpieza de RAM de arriba, lo que los mostraría como basura
+    ; visual cerca de la esquina superior izquierda.
+    lda #$FF
+@oam_fill:
+    sta oam_buffer,x
+    inx
+    bne @oam_fill
+
+    ; Copia los 3 sprites de prueba (Chiquito, enemigo, coleccionable)
+    ; al principio del buffer de OAM.
+    ldx #$00
+@oam_copy:
+    lda oam_init_data,x
+    sta oam_buffer,x
+    inx
+    cpx #12
+    bne @oam_copy
+
     ; Segundo VBlank: la PPU ya está estable para recibir escrituras seguras.
 @vblankwait2:
     bit $2002
@@ -208,12 +262,12 @@ oam_buffer: .res 256  ; página $0200-$02FF, fuente de la OAM DMA ($4014)
     sta $2005
     sta $2005
 
-    ; Habilita generación de NMI y el renderizado de fondo (F2.1: ya hay
-    ; paleta y atributos reales que mostrar). Los sprites siguen apagados
-    ; a propósito: no hay contenido de OAM real todavía (F2.3).
-    lda #%10000000
+    ; Habilita generación de NMI, patrón de sprites en pattern table 1
+    ; (bit3) y renderizado de fondo + sprites (F2.3: ya hay sprites
+    ; reales en el OAM).
+    lda #%10001000           ; PPUCTRL: bit7 NMI, bit3 sprites usan pattern table 1
     sta $2000
-    lda #%00001010           ; PPUMASK: bit1 (fondo en los 8px izquierdos) + bit3 (mostrar fondo)
+    lda #%00011110           ; PPUMASK: fondo+sprites, incluyendo los 8px izquierdos
     sta $2001
 
 mainloop:
@@ -221,8 +275,20 @@ mainloop:
     beq mainloop            ; espera a que el NMI marque el frame como listo
     lda #$00
     sta frame_ready
-    ; Aquí entrará la lógica de juego una vez por frame (Fase 3 en
-    ; adelante). Todavía no hay ninguna.
+
+    ; Animación mínima de Chiquito (F2.3): alterna idle/caminar cada 16
+    ; frames usando el bit 4 de frame_count. Es la única "lógica de
+    ; juego" de este milestone; el resto llega en Fase 3.
+    lda frame_count
+    and #%00010000
+    beq @idle
+    lda #TILE_CHIQUITO_WALK
+    jmp @set_tile
+@idle:
+    lda #TILE_CHIQUITO_IDLE
+@set_tile:
+    sta oam_buffer+1         ; byte de tile del primer sprite (Chiquito)
+
     jmp mainloop
 .endproc
 

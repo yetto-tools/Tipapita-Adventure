@@ -171,6 +171,13 @@ El color índice 0 de las 4 subpaletas de fondo (`$3F00`, `$3F04`, `$3F08`, `$3F
 - **Límites de patrones/bancos (F2.2):** 5 tiles usados de 256 posibles en pattern table 0; CHR-ROM total 128 KB, prácticamente todo libre. No hace falta bank-switching de CHR todavía — se revisará cuando haya más de un tileset/mundo (Fase 8).
 - **Estado del arte actual:** los 5 tiles de `pradera.png` son una **prueba técnica de primera pasada** (formas geométricas simples), no arte final. El arte real del juego pasa por el mismo pipeline cuando esté listo, siguiendo `ART_GUIDELINES.md`.
 
+### Sprites y OAM (decidido — F2.3, 2026-11-10)
+
+- Los tiles de sprite (`assets/sprites/chiquito_test.png`, mismo pipeline que los de fondo) se agregan al segmento CHARS justo después de los de fondo, por lo que **hoy pattern table 0 y pattern table 1 exponen los mismos bytes físicos de CHR-ROM** (ningún registro de banco del MMC3 los separa todavía — ver R0-R5 en `mmc3_init_values`). Los índices de tile de sprite (5-8) simplemente caen después de los índices de fondo (0-4) en ese mismo CHR físico. Esto cambiará cuando haya bank-switching real de CHR (Fase 8, múltiples tilesets).
+- `oam_buffer` ($0200-$02FF) se rellena con `$FF` en el reset antes de escribir sprites reales — es la técnica estándar de NES para ocultar sprites sin usar (Y=$FF los deja fuera de la pantalla visible). Sin esto, los sprites no usados se ven como basura en la esquina superior izquierda (Y=0 tras la limpieza de RAM).
+- Hitbox del jugador: definida como constante (8x8, sin margen) en `src/main.s`, pero sin consumir todavía — el sistema de colisión real es F3.3.
+- Límite de sprites por scanline (hardware): 8 máximo. Con 3 sprites totales, muy por debajo; se revisará activamente cuando haya más entidades simultáneas (Fase 5+).
+
 ## 10. Rendimiento
 
 Prioridades:

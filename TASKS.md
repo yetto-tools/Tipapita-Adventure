@@ -189,15 +189,26 @@
 - **Límites de patrones y bancos (validado):** se usan 5 de los 128 tiles disponibles en la ventana CHR de 2KB mapeada por R0/R1 (banco físico 0); de los 256 tiles posibles en pattern table 0 completa (ambas ventanas de 1KB más las de 2KB), hay amplio margen para crecer antes de necesitar bank-switching de CHR. El CHR-ROM total es 128 KB; con 5 tiles (80 bytes) usados, queda prácticamente todo el espacio libre para contenido futuro.
 - Limitaciones pendientes: los 5 tiles son una **prueba técnica de primera pasada** (formas geométricas simples en escala de grises), no arte final — el arte real del juego, con la identidad visual de `ART_GUIDELINES.md`, se produce después con el mismo pipeline. La disposición de la escena está fija en `build_scene.py` (no es un sistema de mapas general; eso es F4.1). No probado en hardware real.
 
-## F2.3 Sprites [P1]
-- [ ] Diseñar protagonista original.
-- [ ] Crear hoja de sprites.
-- [ ] Definir animaciones y hitboxes.
-- [ ] Crear enemigo inicial.
-- [ ] Crear coleccionable.
-- [ ] Validar sprites por scanline.
+## F2.3 Sprites [P1] — Implementada, compilada, probada en emulador (2026-11-10)
+- [x] Diseñar protagonista original. (Chiquito — prueba técnica de primera pasada, no arte final; ver limitaciones)
+- [x] Crear hoja de sprites. (`assets/sprites/chiquito_test.png`, vía el mismo pipeline `png2chr.py` de F2.2)
+- [x] Definir animaciones y hitboxes. (2 frames: idle/caminar, alternan cada 16 frames vía `frame_count`; hitbox 8x8 definida como constante, sin usar todavía — colisión real es F3.3)
+- [x] Crear enemigo inicial. (tile estático, subpaleta propia)
+- [x] Crear coleccionable. (tile estático tipo gema, subpaleta propia)
+- [x] Validar sprites por scanline. (ver detalle abajo — mecanismo real verificado, no asumido)
 
 **Aceptación:** sprites se muestran y animan sin corrupción; límites documentados.
+
+**Registro de la tarea:**
+- Archivos: `tools/gen_test_spritesheet.py` (genera el asset de prueba), `assets/sprites/chiquito_test.png` (nuevo), `src/main.s` (constantes de tile/hitbox, datos iniciales de OAM, relleno de sprites sin usar con Y=$FF, animación en `mainloop`, `PPUCTRL`/`PPUMASK` actualizados para sprites en pattern table 1), `Makefile` (regla para `dist/tiles_sprites.s`), `tools/test_sprites.lua` (nuevo).
+- Comando de build: `make clean && make rom`.
+- Resultado de compilación: éxito, mismo header/tamaño de ROM.
+- Prueba ejecutada: `fceux --loadlua tools/test_sprites.lua dist/chiquito.nes`.
+- Resultado observado: los 3 sprites (Chiquito, enemigo, coleccionable) se ven en sus posiciones con colores distintos del fondo; la animación de Chiquito alterna correctamente entre tile idle (en frame_count=8) y tile caminar (en frame_count=29); la subpaleta de sprite seleccionada por atributo realmente distingue jugador (tan, `(255,154,56)`) de enemigo (rojo oscuro, `(166,0,0)`) en un píxel de contorno — confirma que la selección de subpaleta por atributo funciona, no solo que hay color. `$2002` bit 5 (desborde de sprites por scanline) no se activó. `RESULT=PASS`.
+- **Sprites sin usar ocultos correctamente:** se detectó que, tras la limpieza de RAM, los 61 sprites sin usar quedaban en Y=0 (visibles como basura en la esquina superior izquierda al activar el renderizado de sprites). Corregido rellenando `oam_buffer` con `$FF` antes de escribir los 3 sprites reales — técnica estándar de NES para ocultar sprites no usados.
+- **Límite de sprites por scanline (documentado, no solo asumido):** máximo real de hardware es 8 sprites por scanline; usamos 3 sprites en total, ninguno comparte scanline con otro en esta escena — muy por debajo del límite. El flag de desborde (`$2002` bit 5) se verificó leyéndolo directamente, no se asumió que "no debería activarse".
+- **Incidente de entorno (no relacionado con la ROM):** Mesen2 empezó a fallar con `std::bad_cast` / señal 6 (abort) incluso sin cargar ninguna ROM, confirmado con `dmesg`. Se investigó: no es un lockfile ni un `settings.json` corrupto (se limpiaron ambos y el fallo persiste). Es una regresión del entorno/instalación de Mesen2 en WSL, no de este proyecto. FCEUX siguió funcionando normalmente durante toda la tarea y es la evidencia real detrás de este registro. Pendiente: reinstalar o diagnosticar Mesen2 cuando se necesite de nuevo.
+- Limitaciones pendientes: los 4 tiles de sprite son una prueba técnica (formas geométricas simples), no arte final del juego — el arte real de Chiquito pasa por el mismo pipeline cuando esté listo. La hitbox está definida pero no consumida por ningún código de colisión todavía (F3.3). No probado en hardware real. Mesen2 no disponible temporalmente (ver incidente arriba).
 
 ---
 

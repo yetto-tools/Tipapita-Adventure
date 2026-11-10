@@ -109,15 +109,24 @@
 - Resultado observado: FCEUX reconoce "Mapper #: 4 / Mapper name: MMC3", carga la ROM, corre 30 frames vía el script Lua y sale limpiamente (`Emulator Start` → `Emulator Exit`, sin errores).
 - Limitaciones pendientes: `main.s` es intencionalmente mínimo (`reset` es un bucle infinito, `nmi`/`irq` son `rti`). No hay inicialización real de pila/PPU/APU, no hay gráficos, no se ha probado en hardware real. Eso corresponde a F1.2 y F1.3.
 
-## F1.2 Reset e inicialización [P0]
-- [ ] Implementar reset.
-- [ ] Inicializar stack.
-- [ ] Configurar interrupciones.
-- [ ] Inicializar PPU y APU de forma segura.
-- [ ] Limpiar buffers y estado de RAM.
-- [ ] Esperar sincronización de PPU cuando sea necesario.
+## F1.2 Reset e inicialización [P0] — Implementada, compilada, probada en emulador (2026-11-10)
+- [x] Implementar reset.
+- [x] Inicializar stack. (`ldx #$ff` / `txs`)
+- [x] Configurar interrupciones. (IRQ de frame de APU y DMC desactivados; NMI/IRQ de CPU dejados desactivados a propósito — se habilitan en F1.3)
+- [x] Inicializar PPU y APU de forma segura. (dos esperas de VBlank antes de escribir VRAM; paleta completa inicializada a negro `$0F`)
+- [x] Limpiar buffers y estado de RAM. (`$0000-$07FF` a cero)
+- [x] Esperar sincronización de PPU cuando sea necesario. (esperas de VBlank antes de cada acceso a VRAM)
 
 **Aceptación:** ROM arranca de forma estable y no muestra corrupción inicial.
+
+**Registro de la tarea:**
+- Archivos: `src/main.s` (rutina `reset` reemplazada por la secuencia real), `tools/test_init.lua` (nuevo).
+- Comando de build: `make clean && make rom`.
+- Resultado de compilación: éxito, `dist/chiquito.nes` válido (mismo header/tamaño que F1.1).
+- Prueba ejecutada: `fceux --loadlua tools/test_init.lua dist/chiquito.nes`, automatizada (escribe resultado a archivo, no requiere inspección manual).
+- Resultado observado: tras 10 frames, `PC` queda dentro del banco fijo (`$C05B`, rango `$C000-$FFF9`) — confirma que el reset terminó y quedó en el bucle estable, no colgado ni saltado fuera de rango. Los 5 píxeles muestreados (esquinas + centro) son negro puro `(0,0,0)` — confirma paleta inicializada, sin colores de encendido indefinidos ni basura visual. `RESULT=PASS`.
+- Verificación adicional: la ROM también carga y corre sin errores en Mesen2 (proceso estable, sin mensajes de error).
+- Limitaciones pendientes: NMI real, cola de PPU y OAM DMA no implementados todavía (`nmi`/`irq` siguen siendo `rti`); no hay renderizado de fondo/sprites (deliberado, sin nametables ni CHR todavía); no probado en hardware real.
 
 ## F1.3 NMI/IRQ [P0]
 - [ ] Implementar NMI.

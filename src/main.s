@@ -1,17 +1,36 @@
 ; Tipapita Adventure — punto de entrada.
 ;
-; F1.3 (NMI/IRQ): implementa el NMI real con responsabilidades fijas, en
-; este orden, documentado aquí porque es la única fuente de verdad sobre
-; qué hace el NMI cada frame:
+; F1.3 (NMI/IRQ): el NMI real tiene responsabilidades fijas, en este
+; orden, documentado aquí porque es la única fuente de verdad sobre qué
+; hace el NMI cada frame:
 ;   1) OAM DMA: copia el buffer de sombra de sprites ($0200-$02FF) al OAM
 ;      real de la PPU. Va primero porque es lo más urgente en VBlank.
 ;   2) Vacía la cola de actualizaciones de PPU (si hay algo encolado).
 ;   3) Marca `frame_ready` y avanza `frame_count`, para sincronizar al
 ;      main loop con la tasa real de refresco (60 Hz NTSC).
 ; Todavía NO se escriben registros de scroll (no hay cámara, Fase 4) ni se
-; implementa IRQ de mapper (no hay HUD con split-screen todavía). El
-; renderizado de fondo/sprites sigue desactivado a propósito: no hay
-; nametables ni CHR reales, solo paleta en negro (F1.2).
+; implementa IRQ de mapper (no hay HUD con split-screen todavía).
+;
+; F2.1 (paletas): el reset ahora carga paletas reales de pradera
+; (cielo/pradera/tierra) y de sprite (jugador/enemigo/ítem) desde
+; src/data/palettes.s, limpia el nametable 0 y pinta su tabla de
+; atributos en 3 bandas para hacer visibles esas subpaletas sin
+; necesitar tiles de arte todavía (el CHR-ROM sigue en blanco — eso es
+; F2.2/F2.3). El renderizado de fondo se enciende por primera vez; los
+; sprites siguen apagados (sin contenido de OAM real todavía).
+
+.include "data/palettes.s"
+.include "data/chr_test.s"
+
+.segment "RODATA"
+; R0,R1: ventanas CHR de 2KB -> banco 0. R2-R5: ventanas CHR de 1KB -> banco 0.
+; Así $0000-$1FFF completo apunta al principio de CHR-ROM, donde está
+; chr_test.s. R6,R7: ventanas PRG swappeables de 8KB ($8000-$9FFF y
+; $A000-$BFFF) -> bancos 0 y 1. Todavía no hay código ni datos ahí
+; (nuestro código vive en el banco fijo $E000-$FFFF), son solo valores
+; conocidos para no dejar el mapper en un estado indefinido.
+mmc3_init_values:
+    .byte $00, $00, $00, $00, $00, $00, $00, $01
 
 PPU_QUEUE_CAPACITY = 32
 ; Presupuesto de VBlank (estimado, NTSC ~2273 ciclos de CPU disponibles):
@@ -81,6 +100,22 @@ oam_buffer: .res 256  ; página $0200-$02FF, fuente de la OAM DMA ($4014)
     stx $2001               ; PPUMASK=0: fondo y sprites desactivados
     stx $4010               ; desactiva el IRQ del canal DMC
 
+    ; Inicializa el mapper MMC3: fija las 6 ventanas de CHR (R0-R5) al
+    ; banco físico 0 y las 2 ventanas swappeables de PRG (R6-R7) a bancos
+    ; conocidos. A diferencia de $E000-$FFFF (fijo por hardware), TODO el
+    ; espacio de CHR depende de estos registros, que NO tienen un valor
+    ; por defecto garantizado al encender. Se detectó este hueco al
+    ; validar F2.1 en FCEUX: sin este paso, lo que la PPU mostraba no
+    ; coincidía con los bytes de CHR-ROM realmente escritos en el
+    ; archivo — ver registro de la tarea en TASKS.md.
+@mmc3_init:
+    stx $8000               ; selecciona registro R0..R7 (X = 0..7)
+    lda mmc3_init_values,x
+    sta $8001                ; banco físico para ese registro
+    inx
+    cpx #$08
+    bne @mmc3_init
+
     ; Primer VBlank: garantiza que la PPU ya terminó su encendido antes de
     ; tocarla (secuencia estándar de arranque de NES).
 @vblankwait1:
@@ -107,8 +142,7 @@ oam_buffer: .res 256  ; página $0200-$02FF, fuente de la OAM DMA ($4014)
     bit $2002
     bpl @vblankwait2
 
-    ; Inicializa toda la paleta (32 bytes: fondo + sprites) a negro ($0F),
-    ; para que el color mostrado no sea un valor indefinido de encendido.
+    ; Carga las 32 paletas reales (fondo + sprites) desde palette_table.
     ; Se escribe de forma directa (no por la cola) porque el renderizado
     ; sigue desactivado: mientras $2001 tenga fondo y sprites apagados,
     ; escribir VRAM fuera de VBlank es seguro.
@@ -117,12 +151,50 @@ oam_buffer: .res 256  ; página $0200-$02FF, fuente de la OAM DMA ($4014)
     sta $2006
     lda #$00
     sta $2006
-    ldx #$20                ; 32 bytes de paleta
-@clearpalette:
-    lda #$0F                ; negro
+    ldx #$00
+@copypalette:
+    lda palette_table,x
     sta $2007
-    dex
-    bne @clearpalette
+    inx
+    cpx #32
+    bne @copypalette
+
+    ; Llena el nametable 0 completo (1024 bytes: 960 de tiles + 64 de
+    ; atributos, estos últimos se sobrescriben abajo) con el tile 1 (el
+    ; bloque sólido de chr_test.s). Así cada subpaleta de fondo muestra su
+    ; índice de color 1, que sí es independiente por subpaleta (ver nota
+    ; en palettes.s sobre por qué el índice 0 no sirve para esta prueba).
+    bit $2002
+    lda #$20
+    sta $2006
+    lda #$00
+    sta $2006
+    lda #$01
+    ldy #$04                ; 4 páginas de 256 bytes = 1024 bytes
+@nt_clear_outer:
+    ldx #$00
+@nt_clear_inner:
+    sta $2007
+    inx
+    bne @nt_clear_inner
+    dey
+    bne @nt_clear_outer
+
+    ; Sobrescribe la tabla de atributos ($23C0-$23FF, 64 bytes) con las 3
+    ; bandas de attr_table_pradera, para hacer visibles las subpaletas de
+    ; fondo 0/1/2 (cielo/pradera/tierra) sin necesitar tiles reales.
+    bit $2002
+    lda #$23
+    sta $2006
+    lda #$C0
+    sta $2006
+    ldx #$00
+@copyattr:
+    lda attr_table_pradera,x
+    sta $2007
+    inx
+    cpx #64
+    bne @copyattr
 
     ; Reinicia el latch de scroll/dirección para dejar la PPU en un estado
     ; conocido.
@@ -131,11 +203,13 @@ oam_buffer: .res 256  ; página $0200-$02FF, fuente de la OAM DMA ($4014)
     sta $2005
     sta $2005
 
-    ; Habilita generación de NMI. El renderizado (fondo/sprites) sigue
-    ; desactivado a propósito: todavía no hay nametables ni CHR reales
-    ; (Fase 2), así que encenderlo ahora mostraría contenido indefinido.
+    ; Habilita generación de NMI y el renderizado de fondo (F2.1: ya hay
+    ; paleta y atributos reales que mostrar). Los sprites siguen apagados
+    ; a propósito: no hay contenido de OAM real todavía (F2.3).
     lda #%10000000
     sta $2000
+    lda #%00001010           ; PPUMASK: bit1 (fondo en los 8px izquierdos) + bit3 (mostrar fondo)
+    sta $2001
 
 mainloop:
     lda frame_ready

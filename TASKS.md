@@ -151,14 +151,25 @@
 
 # Fase 2 — Gráficos y pipeline de assets
 
-## F2.1 Paletas [P1]
-- [ ] Seleccionar paletas reales de NES para pradera.
-- [ ] Crear paletas para jugador, enemigos y objetos.
-- [ ] Crear paletas de fondo.
-- [ ] Validar atributos de fondo.
-- [ ] Probar contraste en pantalla real.
+## F2.1 Paletas [P1] — Implementada, compilada, probada en emulador (2026-11-10)
+- [x] Seleccionar paletas reales de NES para pradera. (cielo/pradera/tierra, `src/data/palettes.s`)
+- [x] Crear paletas para jugador, enemigos y objetos. (3 subpaletas de sprite definidas; sin usar todavía — sprites apagados hasta F2.3)
+- [x] Crear paletas de fondo. (3 subpaletas de fondo + 1 sin usar)
+- [x] Validar atributos de fondo. (tabla de atributos de 3 bandas horizontales, verificada byte a byte con `ppu.readbyte` en FCEUX)
+- [x] Probar contraste en pantalla real. (captura real de FCEUX, 3 colores distintos confirmados por píxel)
 
 **Aceptación:** paletas válidas y legibles en ROM, no solo en editor.
+
+**Registro de la tarea:**
+- Archivos: `src/data/palettes.s` (nuevo), `src/data/chr_test.s` (nuevo — tile de prueba sólido, NO arte final, ver nota abajo), `src/main.s` (carga de paleta real, llenado de nametable/atributos, inicialización de mapper MMC3, habilitación de renderizado de fondo), `tools/test_palette.lua` (nuevo).
+- Comando de build: `make clean && make rom`.
+- Resultado de compilación: éxito, mismo header/tamaño que fases anteriores.
+- Prueba ejecutada: `fceux --loadlua tools/test_palette.lua dist/chiquito.nes`, automatizada (usa `emu.getscreenpixel`, que lee el framebuffer real).
+- Resultado observado: 3 píxeles muestreados (uno por banda) dan colores distintos y ninguno negro — cielo `(93,150,255)`, pradera `(130,211,16)`, tierra `(203,77,12)`. `RESULT=PASS`. También confirmado visualmente con una captura real (3 bandas horizontales correctas) y verificado sin errores en Mesen2.
+- **Dos hallazgos reales de hardware descubiertos y corregidos durante esta tarea** (documentados en comentarios del código, no solo aquí):
+  1. El color índice 0 de las 4 subpaletas de fondo ($3F00/$3F04/$3F08/$3F0C) es la MISMA celda física en el PPU — no puede haber un "color 0" independiente por subpaleta. Se confirmó leyendo la VRAM directamente con `ppu.readbyte` en FCEUX tras observar que la pantalla salía negra con una paleta aparentemente correcta. Por eso la prueba usa un tile sólido de índice 1 (`chr_test.s`) en vez de depender del índice 0.
+  2. Los registros de banco del mapper MMC3 (R0-R7) no tienen un valor por defecto garantizado al encender — a diferencia de $E000-$FFFF (fijo por hardware), TODO el espacio de CHR depende de ellos. Sin inicializarlos explícitamente, la PPU mostraba contenido que no correspondía a los bytes de CHR-ROM realmente escritos. Se agregó una inicialización explícita de R0-R7 en `reset` (ver `mmc3_init_values` en `src/main.s`).
+- Limitaciones pendientes: `chr_test.s` es un tile de prueba técnico, no arte del juego (eso es F2.2/F2.3). Las paletas de sprite están definidas pero no usadas (sprites siguen apagados). No probado en hardware real.
 
 ## F2.2 Tiles y metatiles [P1]
 - [ ] Definir formato y organización CHR.

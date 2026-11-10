@@ -149,6 +149,14 @@ La progresión se divide en etapas:
 - **Compatibilidad esperada (no probada todavía):** Mesen2 y FCEUX en WSL/Windows soportan mapper 4 completo, incluyendo IRQ. No se ha probado en hardware real ni se debe declarar compatibilidad real hasta hacerlo.
 - **Pendiente para Fase 1:** escribir el linker config (`.cfg`) de cc65 que coincida con estos bancos y el header iNES, y validarlo con una ROM mínima que arranque.
 
+### Inicialización del mapper MMC3 (descubierto en F2.1, 2026-11-10)
+
+Los registros de banco del MMC3 (R0-R7, escritos vía `$8000`/`$8001`) **no tienen un valor por defecto garantizado al encender**. A diferencia de `$E000-$FFFF` (fijo por hardware sin importar el mapper), todo el espacio de CHR (`$0000-$1FFF`) y las ventanas swappeables de PRG (`$8000-$BFFF`) dependen de estos registros. `reset` los inicializa explícitamente (R0-R5 = banco CHR 0, R6/R7 = bancos PRG 0/1) antes de habilitar el renderizado — ver `mmc3_init_values` en `src/main.s`. Sin este paso, se comprobó en FCEUX que la PPU mostraba contenido que no correspondía a los bytes de CHR-ROM realmente escritos en el archivo.
+
+### Quirk de paleta: color índice 0 compartido entre subpaletas de fondo
+
+El color índice 0 de las 4 subpaletas de fondo (`$3F00`, `$3F04`, `$3F08`, `$3F0C`) es, en hardware real, la **misma celda física** — no existe un "color 0" independiente por subpaleta; solo los índices 1/2/3 varían de verdad entre subpaletas. Confirmado leyendo la VRAM directamente con `ppu.readbyte` en FCEUX (ver registro de F2.1 en `TASKS.md`). Cualquier tile pensado para mostrar color de una subpaleta específica debe usar índices 1/2/3, nunca depender del índice 0 para distinguirse de otra subpaleta.
+
 ## 10. Rendimiento
 
 Prioridades:

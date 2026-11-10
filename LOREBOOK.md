@@ -1,4 +1,4 @@
-# LOREBOOK — Chiquito y los Pipapitas
+# LOREBOOK — Tipapita Adventure
 
 ## 1. El universo
 

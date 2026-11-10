@@ -1,5 +1,5 @@
 # ART GUIDELINES
-## Chiquito y los Pipapitas
+## Tipapita Adventure
 
 ## 1. Dirección artística
 

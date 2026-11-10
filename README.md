@@ -1,4 +1,4 @@
-# Chiquito y los Pipapitas
+# Tipapita Adventure
 
 ## Descripción
 

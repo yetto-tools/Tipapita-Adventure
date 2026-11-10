@@ -1,5 +1,5 @@
 # ARCHITECTURE
-## Arquitectura técnica de Chiquito y los Pipapitas
+## Arquitectura técnica de Tipapita Adventure
 
 ## 1. Plataforma
 
@@ -85,10 +85,10 @@ Convención estándar NES para las 2 KB de RAM interna:
 |---|---|
 | `$0000-$00FF` | Zero Page (variables de acceso rápido) |
 | `$0100-$01FF` | Pila del 6502 (uso de hardware, no variables) |
-| `$0200-$02FF` | Reservado para el buffer de sombra de OAM (fuente de OAM DMA) — se implementa en F1.3 |
-| `$0300-$07FF` | RAM general (variables de juego, cola de actualización de PPU, etc.) |
+| `$0200-$02FF` | `oam_buffer` — buffer de sombra de OAM, fuente de la OAM DMA (`$4014`). Implementado en F1.3 como segmento dedicado `OAM` en `linker/chiquito.cfg` |
+| `$0300-$07FF` | RAM general: cola de actualización de PPU (`ppu_queue_*`, F1.3) y variables de juego futuras |
 
-Esto todavía no está en uso real (el `main.s` actual no declara variables), pero queda fijado como convención para cuando F1.2/F1.3 y el motor empiecen a necesitar RAM.
+Estado real (F1.3): `frame_ready`, `frame_count` y los argumentos de `ppu_queue_push` viven en Zero Page (`$0000-$0004`); la cola de PPU (`ppu_queue_len`, `ppu_queue_overflow` y sus 3 arrays de 32 bytes) vive en `$0300-$0361`. Todavía no hay variables de jugador/enemigos/mapa — eso llega con el motor (Fase 2+).
 
 ## 5. Jugador
 

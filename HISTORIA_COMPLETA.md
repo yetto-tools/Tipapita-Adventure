@@ -1,5 +1,5 @@
 # HISTORIA COMPLETA
-## Chiquito y los Pipapitas
+## Tipapita Adventure
 
 ## Prólogo — Un hogar entre las montañas
 

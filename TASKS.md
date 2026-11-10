@@ -128,15 +128,24 @@
 - Verificación adicional: la ROM también carga y corre sin errores en Mesen2 (proceso estable, sin mensajes de error).
 - Limitaciones pendientes: NMI real, cola de PPU y OAM DMA no implementados todavía (`nmi`/`irq` siguen siendo `rti`); no hay renderizado de fondo/sprites (deliberado, sin nametables ni CHR todavía); no probado en hardware real.
 
-## F1.3 NMI/IRQ [P0]
-- [ ] Implementar NMI.
-- [ ] Definir responsabilidades de NMI.
-- [ ] Implementar cola PPU inicial.
-- [ ] Implementar OAM DMA.
-- [ ] Añadir IRQ solo si el mapper y una característica aprobada lo requieren.
-- [ ] Medir presupuesto de rutinas.
+## F1.3 NMI/IRQ [P0] — Implementada, compilada, probada en emulador (2026-11-10)
+- [x] Implementar NMI.
+- [x] Definir responsabilidades de NMI. (orden fijo documentado en el encabezado de `src/main.s`: 1. OAM DMA, 2. flush de cola de PPU, 3. contador/bandera de frame)
+- [x] Implementar cola PPU inicial. (`ppu_queue_push`/`ppu_queue_flush`, capacidad 32 entradas; todavía sin llamadores — mecanismo probado, no usado por contenido real aún)
+- [x] Implementar OAM DMA. (buffer de sombra `oam_buffer` alineado en página `$0200` vía nuevo segmento `OAM` del linker; DMA disparada cada NMI)
+- [ ] Añadir IRQ solo si el mapper y una característica aprobada lo requieren. (no aplica todavía: sin HUD con split-screen ni otra necesidad de IRQ de mapper)
+- [x] Medir presupuesto de rutinas. (estimado por cálculo de ciclos, no medido con profiler — ver limitación abajo)
 
 **Aceptación:** sincronización estable y rutinas documentadas; no exceder presupuesto sin detección.
+
+**Registro de la tarea:**
+- Archivos: `src/main.s` (NMI real, `ppu_queue_push`/`ppu_queue_flush`, main loop con handshake `frame_ready`), `linker/chiquito.cfg` (nuevo segmento `OAM` en `$0200-$02FF`), `tools/test_nmi.lua` (nuevo).
+- Comando de build: `make clean && make rom`.
+- Resultado de compilación: éxito. Mapa de segmentos verificado: `OAM` en `$0200-$02FF`, `ZEROPAGE` `$0000-$0004`, `BSS` desde `$0300` (98 bytes: cola de PPU), `STARTUP` dentro de `$C000-$FFF9`.
+- Prueba ejecutada: `fceux --loadlua tools/test_nmi.lua dist/chiquito.nes`.
+- Resultado observado: `frame_count` avanzó exactamente 20 en 20 frames (delta=20) — el NMI se dispara una vez por frame, sin duplicarse ni perderse. PC estable en el banco fijo tras la OAM DMA. `ppu_queue_overflow=0`. `RESULT=PASS`.
+- Presupuesto de VBlank (estimado por cálculo de ciclos, documentado en `src/main.s`): OAM DMA ~514 ciclos + flush de cola en el peor caso (32 entradas) ~992 ciclos + overhead ~45 ciclos ≈ 1551 ciclos, dentro de los ~2273 ciclos disponibles en VBlank NTSC. **No es una medición real con el profiler de Mesen2** — pendiente de verificar ahí cuando exista contenido real que llene la cola.
+- Limitaciones pendientes: la cola de PPU no tiene todavía ningún llamador real (nada encola escrituras aún); no hay IRQ de mapper (no hace falta todavía); no hay registros de scroll (sin cámara, Fase 4); no probado en hardware real.
 
 ---
 

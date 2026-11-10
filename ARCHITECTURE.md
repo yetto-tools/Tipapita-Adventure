@@ -157,6 +157,20 @@ Los registros de banco del MMC3 (R0-R7, escritos vía `$8000`/`$8001`) **no tien
 
 El color índice 0 de las 4 subpaletas de fondo (`$3F00`, `$3F04`, `$3F08`, `$3F0C`) es, en hardware real, la **misma celda física** — no existe un "color 0" independiente por subpaleta; solo los índices 1/2/3 varían de verdad entre subpaletas. Confirmado leyendo la VRAM directamente con `ppu.readbyte` en FCEUX (ver registro de F2.1 en `TASKS.md`). Cualquier tile pensado para mostrar color de una subpaleta específica debe usar índices 1/2/3, nunca depender del índice 0 para distinguirse de otra subpaleta.
 
+### Formato de CHR, metatiles y pipeline de assets (decidido — F2.2, 2026-11-10)
+
+- **Formato de tile:** 8x8 píxeles, 2 bits por píxel, planar (16 bytes: 8 del plano bajo + 8 del plano alto) — formato estándar de NES, sin variación propia.
+- **Organización de pattern tables:** pattern table 0 (`$0000-$0FFF`) para tiles de fondo; pattern table 1 (`$1000-$1FFF`) reservada para sprites (F2.3). Dentro de pattern table 0, los tiles usados hoy ocupan los índices 0-4 (ver abajo); el resto queda libre para crecer.
+- **Metatile:** bloque de 16x16px = 2x2 tiles. Formato: 4 índices de tile (orden TL, TR, BL, BR) + 1 índice de subpaleta de fondo (0-3). Definidos como datos en `tools/build_scene.py` (función `METATILES`), no en el ensamblador — son datos de diseño, no lógica de motor.
+- **Pipeline de assets (real, no solo documentado):**
+  1. `assets/tiles/pradera.png` — asset fuente: una hoja de tiles de 8px de alto, cada tile con como máximo 4 colores "marcador" fijos (ver `tools/png2chr.py` para la convención de colores → índice).
+  2. `tools/png2chr.py` — convierte el PNG a CHR planar, emitido como `.s` de ca65. Regla clave: el mapeo color→índice es **global para todo el archivo**, no por tile (un mapeo por tile rompería la consistencia de qué índice significa qué color entre tiles distintos — error real encontrado y corregido durante esta tarea).
+  3. `tools/build_scene.py` — expande una grilla de metatiles (16x15, una pantalla completa) a los 960 bytes de tiles + 64 bytes de atributos del nametable, respetando la agrupación de atributos en bloques de 2x2 metatiles.
+  4. El `Makefile` regenera ambos `.s` (en `dist/`) desde los assets fuente antes de ensamblar — **no se edita a mano** ningún dato de tile o escena.
+  5. `src/main.s` solo copia los bytes ya compilados a VRAM con `ppu_copy_bulk` (rutina genérica de copia ROM→`$2007`, reutilizable para futuros niveles).
+- **Límites de patrones/bancos (F2.2):** 5 tiles usados de 256 posibles en pattern table 0; CHR-ROM total 128 KB, prácticamente todo libre. No hace falta bank-switching de CHR todavía — se revisará cuando haya más de un tileset/mundo (Fase 8).
+- **Estado del arte actual:** los 5 tiles de `pradera.png` son una **prueba técnica de primera pasada** (formas geométricas simples), no arte final. El arte real del juego pasa por el mismo pipeline cuando esté listo, siguiendo `ART_GUIDELINES.md`.
+
 ## 10. Rendimiento
 
 Prioridades:

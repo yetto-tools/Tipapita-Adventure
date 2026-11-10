@@ -28,19 +28,3 @@ palette_table:
     .byte $0F, $06, $16, $26   ; 1: enemigo genérico (rojo oscuro, marrón-rojo, rosado)
     .byte $0F, $08, $18, $28   ; 2: objeto/ítem (oliva, amarillo, amarillo claro)
     .byte $0F, $0F, $0F, $0F   ; 3: sin usar todavía
-
-; Tabla de atributos del nametable 0 (64 bytes, $23C0-$23FF): tres bandas
-; horizontales que seleccionan subpaletas de fondo distintas, sin
-; necesitar tiles de arte reales todavía (el CHR-ROM sigue en blanco —
-; F2.2/F2.3). Cada byte cubre un bloque de 32x32 píxeles (4x4 tiles) y
-; repite la misma subpaleta en sus 4 cuadrantes.
-attr_table_pradera:
-    .repeat 24
-        .byte $00   ; filas de atributo 0-2 (píxeles ~0-95): subpaleta 0, cielo
-    .endrepeat
-    .repeat 24
-        .byte $55   ; filas de atributo 3-5 (píxeles ~96-191): subpaleta 1, pradera
-    .endrepeat
-    .repeat 16
-        .byte $AA   ; filas de atributo 6-7 (píxeles ~192-255): subpaleta 2, tierra
-    .endrepeat

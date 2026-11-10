@@ -171,14 +171,23 @@
   2. Los registros de banco del mapper MMC3 (R0-R7) no tienen un valor por defecto garantizado al encender — a diferencia de $E000-$FFFF (fijo por hardware), TODO el espacio de CHR depende de ellos. Sin inicializarlos explícitamente, la PPU mostraba contenido que no correspondía a los bytes de CHR-ROM realmente escritos. Se agregó una inicialización explícita de R0-R7 en `reset` (ver `mmc3_init_values` en `src/main.s`).
 - Limitaciones pendientes: `chr_test.s` es un tile de prueba técnico, no arte del juego (eso es F2.2/F2.3). Las paletas de sprite están definidas pero no usadas (sprites siguen apagados). No probado en hardware real.
 
-## F2.2 Tiles y metatiles [P1]
-- [ ] Definir formato y organización CHR.
-- [ ] Crear tiles iniciales de suelo, cielo, plataformas y decoración.
-- [ ] Definir metatiles.
-- [ ] Crear conversor o pipeline de importación.
-- [ ] Validar límites de patrones y bancos.
+## F2.2 Tiles y metatiles [P1] — Implementada, compilada, probada en emulador (2026-11-10)
+- [x] Definir formato y organización CHR. (8x8, 2bpp planar estándar de NES; pattern table 0 = fondo, pattern table 1 reservada para sprites en F2.3)
+- [x] Crear tiles iniciales de suelo, cielo, plataformas y decoración. (`assets/tiles/pradera.png`: 5 tiles — cielo, nube, suelo con pasto, relleno de tierra, plataforma)
+- [x] Definir metatiles. (formato: 4 índices de tile de 16x16px + 1 índice de subpaleta; definidos en `tools/build_scene.py`)
+- [x] Crear conversor o pipeline de importación. (`tools/png2chr.py`: PNG → CHR; `tools/build_scene.py`: metatiles → nametable/atributos)
+- [x] Validar límites de patrones y bancos. (ver detalle abajo)
 
 **Aceptación:** escenario inicial reproducible desde assets fuente.
+
+**Registro de la tarea:**
+- Archivos: `tools/gen_test_tileset.py` (genera el asset de prueba — NO es arte final), `assets/tiles/pradera.png` (asset fuente real, nuevo), `tools/png2chr.py` (conversor PNG→CHR, nuevo), `tools/build_scene.py` (compilador de metatiles→escena, nuevo), `src/main.s` (nueva rutina genérica `ppu_copy_bulk`, reemplaza el llenado manual de F2.1), `Makefile` (reglas para regenerar `dist/tiles_pradera.s` y `dist/scene_pradera.s` desde los assets fuente), `tools/test_tiles.lua` (nuevo). Se eliminó `src/data/chr_test.s` (superado; era el swatch técnico de F2.1) y `attr_table_pradera` de `palettes.s` (reemplazado por la escena compilada).
+- Comando de build: `make clean && make rom` — regenera los `.s` desde los PNG/definiciones antes de ensamblar, sin pasos manuales.
+- Resultado de compilación: éxito, mismo header/tamaño de ROM.
+- Prueba ejecutada: `fceux --loadlua tools/test_tiles.lua dist/chiquito.nes`.
+- Resultado observado: cielo azul `(93,150,255)` y suelo verde `(0,150,0)` confirmados por píxel en puntos alejados de la nube/plataforma; ninguno es negro. `PC` estable en el banco fijo. `RESULT=PASS`. Confirmado visualmente con captura real (cielo, nube, plataforma flotante y suelo con textura, ver conversación) y sin errores en Mesen2.
+- **Límites de patrones y bancos (validado):** se usan 5 de los 128 tiles disponibles en la ventana CHR de 2KB mapeada por R0/R1 (banco físico 0); de los 256 tiles posibles en pattern table 0 completa (ambas ventanas de 1KB más las de 2KB), hay amplio margen para crecer antes de necesitar bank-switching de CHR. El CHR-ROM total es 128 KB; con 5 tiles (80 bytes) usados, queda prácticamente todo el espacio libre para contenido futuro.
+- Limitaciones pendientes: los 5 tiles son una **prueba técnica de primera pasada** (formas geométricas simples en escala de grises), no arte final — el arte real del juego, con la identidad visual de `ART_GUIDELINES.md`, se produce después con el mismo pipeline. La disposición de la escena está fija en `build_scene.py` (no es un sistema de mapas general; eso es F4.1). No probado en hardware real.
 
 ## F2.3 Sprites [P1]
 - [ ] Diseñar protagonista original.

@@ -11,21 +11,26 @@
 ; Todavía NO se escriben registros de scroll (no hay cámara, Fase 4) ni se
 ; implementa IRQ de mapper (no hay HUD con split-screen todavía).
 ;
-; F2.1 (paletas): el reset ahora carga paletas reales de pradera
-; (cielo/pradera/tierra) y de sprite (jugador/enemigo/ítem) desde
-; src/data/palettes.s, limpia el nametable 0 y pinta su tabla de
-; atributos en 3 bandas para hacer visibles esas subpaletas sin
-; necesitar tiles de arte todavía (el CHR-ROM sigue en blanco — eso es
-; F2.2/F2.3). El renderizado de fondo se enciende por primera vez; los
-; sprites siguen apagados (sin contenido de OAM real todavía).
+; F2.1 (paletas): paletas reales de pradera (cielo/pradera/tierra) y de
+; sprite (jugador/enemigo/ítem) en src/data/palettes.s.
+;
+; F2.2 (tiles y metatiles): los tiles de prueba (suelo, cielo,
+; plataforma, decoración) y la escena de pradera ya NO se escriben a
+; mano: se generan desde un asset fuente real (assets/tiles/pradera.png)
+; vía tools/png2chr.py, y la disposición en pantalla se compila desde una
+; definición de metatiles vía tools/build_scene.py — ver el Makefile
+; (dist/tiles_pradera.s, dist/scene_pradera.s). `reset` solo copia esos
+; bytes ya compilados a VRAM con ppu_copy_bulk. Los sprites siguen
+; apagados (sin contenido de OAM real todavía — eso es F2.3).
 
 .include "data/palettes.s"
-.include "data/chr_test.s"
+.include "../dist/tiles_pradera.s"
+.include "../dist/scene_pradera.s"
 
 .segment "RODATA"
 ; R0,R1: ventanas CHR de 2KB -> banco 0. R2-R5: ventanas CHR de 1KB -> banco 0.
 ; Así $0000-$1FFF completo apunta al principio de CHR-ROM, donde está
-; chr_test.s. R6,R7: ventanas PRG swappeables de 8KB ($8000-$9FFF y
+; tiles_pradera.s. R6,R7: ventanas PRG swappeables de 8KB ($8000-$9FFF y
 ; $A000-$BFFF) -> bancos 0 y 1. Todavía no hay código ni datos ahí
 ; (nuestro código vive en el banco fijo $E000-$FFFF), son solo valores
 ; conocidos para no dejar el mapper en un estado indefinido.
@@ -49,6 +54,8 @@ frame_count: .res 1   ; contador de frames, para timing futuro
 pq_addr_hi:  .res 1   ; argumento de ppu_queue_push: byte alto de la dirección PPU
 pq_addr_lo:  .res 1   ; argumento de ppu_queue_push: byte bajo de la dirección PPU
 pq_data:     .res 1   ; argumento de ppu_queue_push: byte a escribir
+pbulk_src:   .res 2   ; argumento de ppu_copy_bulk: puntero fuente en ROM (low, high)
+pbulk_len:   .res 2   ; argumento de ppu_copy_bulk: cantidad de bytes a copiar (low, high)
 
 .segment "BSS"
 ppu_queue_len:       .res 1
@@ -159,42 +166,40 @@ oam_buffer: .res 256  ; página $0200-$02FF, fuente de la OAM DMA ($4014)
     cpx #32
     bne @copypalette
 
-    ; Llena el nametable 0 completo (1024 bytes: 960 de tiles + 64 de
-    ; atributos, estos últimos se sobrescriben abajo) con el tile 1 (el
-    ; bloque sólido de chr_test.s). Así cada subpaleta de fondo muestra su
-    ; índice de color 1, que sí es independiente por subpaleta (ver nota
-    ; en palettes.s sobre por qué el índice 0 no sirve para esta prueba).
+    ; Copia los 960 bytes de tiles de la escena de pradera a los tiles
+    ; del nametable 0 ($2000-$23BF).
     bit $2002
     lda #$20
     sta $2006
     lda #$00
     sta $2006
-    lda #$01
-    ldy #$04                ; 4 páginas de 256 bytes = 1024 bytes
-@nt_clear_outer:
-    ldx #$00
-@nt_clear_inner:
-    sta $2007
-    inx
-    bne @nt_clear_inner
-    dey
-    bne @nt_clear_outer
+    lda #<scene_pradera_tiles
+    sta pbulk_src
+    lda #>scene_pradera_tiles
+    sta pbulk_src+1
+    lda #<960
+    sta pbulk_len
+    lda #>960
+    sta pbulk_len+1
+    jsr ppu_copy_bulk
 
-    ; Sobrescribe la tabla de atributos ($23C0-$23FF, 64 bytes) con las 3
-    ; bandas de attr_table_pradera, para hacer visibles las subpaletas de
-    ; fondo 0/1/2 (cielo/pradera/tierra) sin necesitar tiles reales.
+    ; Copia los 64 bytes de atributos de la escena a la tabla de
+    ; atributos del nametable 0 ($23C0-$23FF), para que cada metatile
+    ; muestre la subpaleta de fondo que le corresponde.
     bit $2002
     lda #$23
     sta $2006
     lda #$C0
     sta $2006
-    ldx #$00
-@copyattr:
-    lda attr_table_pradera,x
-    sta $2007
-    inx
-    cpx #64
-    bne @copyattr
+    lda #<scene_pradera_attrs
+    sta pbulk_src
+    lda #>scene_pradera_attrs
+    sta pbulk_src+1
+    lda #<64
+    sta pbulk_len
+    lda #>64
+    sta pbulk_len+1
+    jsr ppu_copy_bulk
 
     ; Reinicia el latch de scroll/dirección para dejar la PPU en un estado
     ; conocido.
@@ -298,5 +303,34 @@ mainloop:
     lda #$00
     sta ppu_queue_len
 @done:
+    rts
+.endproc
+
+; Copia pbulk_len bytes desde ROM (pbulk_src) a $2007, es decir, a la
+; dirección de VRAM que el llamador ya haya fijado con $2006. No toca
+; $2006 por sí misma: solo copia bytes, uno tras otro (la PPU
+; autoincrementa la dirección). Usada para volcar datos ya generados en
+; tiempo de build (tiles, escenas) sin escribirlos a mano en ensamblador.
+; pbulk_len debe ser >= 1 (es un bucle do-while; con 0 daría la vuelta).
+.proc ppu_copy_bulk
+    ldy #$00
+@loop:
+    lda (pbulk_src),y
+    sta $2007
+
+    inc pbulk_src
+    bne @no_carry
+    inc pbulk_src+1
+@no_carry:
+
+    lda pbulk_len
+    bne @dec_lo
+    dec pbulk_len+1
+@dec_lo:
+    dec pbulk_len
+
+    lda pbulk_len
+    ora pbulk_len+1
+    bne @loop
     rts
 .endproc

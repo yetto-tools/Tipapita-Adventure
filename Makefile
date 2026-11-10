@@ -11,6 +11,12 @@ OBJ := $(BUILD_DIR)/main.o
 MAP := $(BUILD_DIR)/chiquito.map
 LST := $(BUILD_DIR)/main.lst
 
+# Datos generados a partir de assets fuente (F2.2): tiles desde PNG, y la
+# escena de prueba compilada desde la definición de metatiles. main.s los
+# incluye desde $(BUILD_DIR), así que deben existir antes de ensamblar.
+TILES_PRADERA := $(BUILD_DIR)/tiles_pradera.s
+SCENE_PRADERA := $(BUILD_DIR)/scene_pradera.s
+
 .PHONY: all rom check clean run
 
 all: rom
@@ -20,7 +26,13 @@ rom: $(ROM)
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
-$(OBJ): $(SRC_DIR)/main.s | $(BUILD_DIR)
+$(TILES_PRADERA): assets/tiles/pradera.png tools/png2chr.py | $(BUILD_DIR)
+	$(PYTHON) tools/png2chr.py assets/tiles/pradera.png $(TILES_PRADERA) --label tiles_pradera
+
+$(SCENE_PRADERA): tools/build_scene.py | $(BUILD_DIR)
+	$(PYTHON) tools/build_scene.py $(SCENE_PRADERA)
+
+$(OBJ): $(SRC_DIR)/main.s $(TILES_PRADERA) $(SCENE_PRADERA) | $(BUILD_DIR)
 	$(CA65) -g -l $(LST) -o $(OBJ) $(SRC_DIR)/main.s
 
 $(ROM): $(OBJ) $(LINKER_CFG)

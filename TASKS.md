@@ -229,16 +229,26 @@
 - Resultado observado (4 casos, todos `true`): (1) sostener A+Right por primera vez se detecta como pulsación nueva (`pad1=$81`, `pad1_pressed=$81`); (2) sostenerlos 5 frames más ya NO se marca como pulsación nueva (`pad1=$81`, `pad1_pressed=$00`) — confirma que distingue "sostenido" de "recién presionado"; (3) soltar todo limpia ambos a `$00`; (4) presionar un botón distinto (Down) después de soltar se detecta como pulsación nueva (`pad1=$04`, `pad1_pressed=$04`). `RESULT=PASS`.
 - Limitaciones pendientes: solo mando 1 (no se implementó el 2, no hace falta para un juego de un jugador). Nada reacciona todavía a estos botones — eso es F3.2 (movimiento). No probado en hardware real ni con un mando físico (solo input simulado por script).
 
-## F3.2 Movimiento [P1]
-- [ ] Definir formato de punto fijo.
-- [ ] Implementar movimiento horizontal.
-- [ ] Implementar aceleración y desaceleración.
-- [ ] Implementar gravedad.
-- [ ] Implementar salto.
-- [ ] Evaluar salto variable.
-- [ ] Definir velocidad máxima y control en el aire.
+## F3.2 Movimiento [P1] — Implementada, compilada, probada en emulador (2026-11-10)
+- [x] Definir formato de punto fijo. (8.8: byte alto = píxeles enteros, byte bajo = fracción; 256 = 1 píxel)
+- [x] Implementar movimiento horizontal. (`update_player`, aceleración con Left/Right)
+- [x] Implementar aceleración y desaceleración. (`MOVE_ACCEL` al sostener, `MOVE_FRICTION` al soltar, con clamp exacto en 0 para no oscilar)
+- [x] Implementar gravedad. (`GRAVITY` acumulada cada frame, con velocidad terminal `MAX_FALL_SPEED`)
+- [x] Implementar salto. (impulso `JUMP_VELOCITY` al presionar A estando en el piso)
+- [x] Evaluar salto variable. (soltar A mientras sube recorta `vy` a `JUMP_CUT_SPEED_NEG` — confirmado que acorta el salto)
+- [x] Definir velocidad máxima y control en el aire. (`MOVE_MAX_SPEED`/`NEG_MOVE_MAX_SPEED` para horizontal; no hay distinción aire/suelo para el control horizontal todavía — ver limitaciones)
 
 **Aceptación:** movimiento repetible, estable y ajustable mediante parámetros documentados.
+
+**Registro de la tarea:**
+- Archivos: `src/main.s` (constantes de física `MOVE_*`/`GRAVITY`/`JUMP_*`/`GROUND_Y`, variables `player_x/y/vx/vy`, `player_on_ground`, `player_facing_right`, rutinas `cmp16_signed` y `update_player`, inicialización de posición en `reset`), `tools/test_movement.lua` (nuevo).
+- Comando de build: `make clean && make rom`.
+- Resultado de compilación: éxito, mismo header/tamaño de ROM.
+- Prueba ejecutada: `fceux --loadlua tools/test_movement.lua dist/chiquito.nes`, usando `joypad.set` para simular Right/Left/A reales y leyendo la RAM de física directamente.
+- Resultado observado (5 casos, todos `true`): sostener Right mueve a la derecha con `vx>0`; soltar hace que la fricción detenga `vx` en exactamente `0` (no oscila); sostener Left mueve a la izquierda con `vx<0`; soltar vuelve a detener `vx` en `0`; un salto corto (A un solo frame) alcanza una altura menor que uno largo (A sostenido), confirmando que el corte de salto variable funciona. `RESULT=PASS`. Confirmado también visualmente con captura real.
+- **Piso temporal (`GROUND_Y`):** F3.2 usa una constante fija (Y=179, la misma donde ya estaba parado Chiquito) en vez de colisión real contra los tiles de `scene_pradera`. Esto es intencional y está documentado en el código — la colisión real contra el suelo/plataformas de la escena es F3.3.
+- **Hallazgo de entorno (sin impacto funcional):** durante la instrumentación por Lua se observó que, en la ventana transitoria de 2-3 frames reales que tarda `reset` en terminar (antes de que `update_player` corra por primera vez, confirmado con `frame_count=0` y el PC todavía dentro de `reset`), algunas variables de física muestran un valor residual uniforme no explicado con certeza (posiblemente un artefacto de cómo FCEUX rellena RAM "sin inicializar" combinado con el punto exacto donde `frameadvance()` de Lua corta la ejecución). No tiene efecto visible ni funcional: el OAM del sprite todavía muestra la posición estática inicial durante esa ventana (nada copia `player_x/y` al OAM hasta que `update_player` corre por primera vez), y desde ese primer frame real en adelante la física es matemáticamente exacta (fricción decae en pasos de exactamente `MOVE_FRICTION`, confirmado byte a byte). `tools/test_movement.lua` espera a que termine el reset antes de medir, por lo que no se ve afectado.
+- Limitaciones pendientes: no hay distinción entre control horizontal en el aire vs. en el piso (mismo `MOVE_ACCEL`/`MOVE_FRICTION` siempre); no hay tile de sprite dedicado para salto/caída (usa idle/caminar); no probado en hardware real.
 
 ## F3.3 Colisiones [P1]
 - [ ] Separar hitbox de sprite.

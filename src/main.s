@@ -25,13 +25,6 @@
 ; F2.3 (sprites): Chiquito (con animación idle/caminar), un enemigo y un
 ; coleccionable, generados con el mismo pipeline.
 ;
-; F3.1 (controlador): `read_controller1`, llamada una vez por frame
-; desde el main loop, lee el mando 1 vía $4016 y normaliza 3 estados:
-; `pad1` (botones sostenidos ahora), `pad1_prev` (sostenidos el frame
-; anterior) y `pad1_pressed` (bits que pasaron de 0 a 1 este frame — para
-; detectar flancos, no solo "está sostenido"). Todavía no hay nada que
-; reaccione a estos botones (eso es F3.2 en adelante).
-
 ; F2.3 (sprites): protagonista (Chiquito, con 2 frames de animación),
 ; enemigo inicial y coleccionable, también generados vía
 ; tools/png2chr.py (assets/sprites/chiquito_test.png — igual de
@@ -42,6 +35,20 @@
 ; muestran los mismos bytes físicos de CHR-ROM porque ningún registro de
 ; banco cambia todavía. Por eso los tiles de sprite, índices 5-8, caen
 ; justo después de los 5 tiles de fondo (índices 0-4).
+;
+; F3.1 (controlador): `read_controller1`, llamada una vez por frame
+; desde el main loop, lee el mando 1 vía $4016 y normaliza 3 estados:
+; `pad1` (botones sostenidos ahora), `pad1_prev` (sostenidos el frame
+; anterior) y `pad1_pressed` (bits que pasaron de 0 a 1 este frame — para
+; detectar flancos, no solo "está sostenido").
+;
+; F3.2 (movimiento): posición y velocidad de Chiquito en punto fijo 8.8
+; (byte alto = píxeles enteros, byte bajo = fracción; 256 = 1 píxel).
+; `update_player` aplica aceleración/fricción horizontal, gravedad y
+; salto (con corte de salto variable: soltar A temprano reduce la
+; altura). Usa un **piso temporal fijo** (`GROUND_Y`) en vez de colisión
+; real contra tiles — eso es F3.3. La animación idle/caminar ahora
+; depende de la velocidad real, ya no es un parpadeo por tiempo fijo.
 
 .include "data/palettes.s"
 .include "../dist/tiles_pradera.s"
@@ -60,6 +67,22 @@ TILE_ITEM          = 8
 ; se ajustará cuando haya colisiones reales que probar.
 PLAYER_HITBOX_W = 8
 PLAYER_HITBOX_H = 8
+
+; Bits del byte normalizado de mando (orden estándar de NES: el primer
+; botón leído -- A -- termina en el bit más alto, por cómo se arma el
+; byte con ROL en read_controller1).
+; Física del jugador (F3.2), en punto fijo 8.8 (ver nota arriba sobre el
+; formato). Valores elegidos para que el movimiento se sienta ágil pero
+; controlable; se ajustan por parámetro, sin tocar la lógica.
+MOVE_ACCEL          = $0020   ; ~0.125 px/frame² al sostener izquierda/derecha
+MOVE_FRICTION       = $0030   ; ~0.19 px/frame² de frenado sin input
+MOVE_MAX_SPEED      = $0180   ; 1.5 px/frame, tope horizontal
+NEG_MOVE_MAX_SPEED  = $FE80   ; -1.5 px/frame en complemento a 2 de 16 bits
+GRAVITY             = $0020   ; ~0.125 px/frame² hacia abajo
+MAX_FALL_SPEED      = $0400   ; 4.0 px/frame, velocidad terminal de caída
+JUMP_VELOCITY       = $FC00   ; -4.0 px/frame (impulso inicial del salto)
+JUMP_CUT_SPEED_NEG  = $FE00   ; -2.0 px/frame: tope al soltar A mientras sube
+GROUND_Y            = 179     ; piso TEMPORAL (ver nota F3.2); no es colisión real
 
 ; Bits del byte normalizado de mando (orden estándar de NES: el primer
 ; botón leído -- A -- termina en el bit más alto, por cómo se arma el
@@ -114,6 +137,24 @@ pbulk_len:   .res 2   ; argumento de ppu_copy_bulk: cantidad de bytes a copiar (
 pad1:         .res 1   ; botones del mando 1 sostenidos en este frame
 pad1_prev:    .res 1   ; botones sostenidos en el frame anterior
 pad1_pressed: .res 1   ; botones que pasaron de 0 a 1 este frame (flanco de bajada a presionado)
+
+; Posición y velocidad de Chiquito, en punto fijo 8.8 (ver nota F3.2).
+player_x_lo: .res 1
+player_x_hi: .res 1
+player_y_lo: .res 1
+player_y_hi: .res 1
+player_vx_lo: .res 1
+player_vx_hi: .res 1
+player_vy_lo: .res 1
+player_vy_hi: .res 1
+player_on_ground:    .res 1   ; 1 = parado sobre el piso temporal
+player_facing_right: .res 1   ; 1 = mirando a la derecha (para el flip del sprite)
+
+; Escratch para cmp16_signed: no deben usarse para nada más.
+cmp_a_lo: .res 1
+cmp_a_hi: .res 1
+cmp_b_lo: .res 1
+cmp_b_hi: .res 1
 
 .segment "BSS"
 ppu_queue_len:       .res 1
@@ -223,6 +264,17 @@ oam_buffer: .res 256  ; página $0200-$02FF, fuente de la OAM DMA ($4014)
     cpx #12
     bne @oam_copy
 
+    ; F3.2: posición/estado inicial de Chiquito, en punto fijo 8.8.
+    ; Coincide con la posición estática que se acaba de copiar al OAM
+    ; (Y=179=GROUND_Y, X=100), para que el primer frame no "salte".
+    lda #100
+    sta player_x_hi
+    lda #GROUND_Y
+    sta player_y_hi
+    lda #1
+    sta player_on_ground
+    sta player_facing_right
+
     ; Segundo VBlank: la PPU ya está estable para recibir escrituras seguras.
 @vblankwait2:
     bit $2002
@@ -302,19 +354,7 @@ mainloop:
     sta frame_ready
 
     jsr read_controller1     ; F3.1: actualiza pad1/pad1_prev/pad1_pressed
-
-    ; Animación mínima de Chiquito (F2.3): alterna idle/caminar cada 16
-    ; frames usando el bit 4 de frame_count. Es la única "lógica de
-    ; juego" de este milestone; el resto llega en Fase 3.
-    lda frame_count
-    and #%00010000
-    beq @idle
-    lda #TILE_CHIQUITO_WALK
-    jmp @set_tile
-@idle:
-    lda #TILE_CHIQUITO_IDLE
-@set_tile:
-    sta oam_buffer+1         ; byte de tile del primer sprite (Chiquito)
+    jsr update_player        ; F3.2: física + escribe posición/tile/flip al OAM
 
     jmp mainloop
 .endproc
@@ -380,6 +420,248 @@ mainloop:
     eor pad1_prev
     and pad1
     sta pad1_pressed
+    rts
+.endproc
+
+; Compara (cmp_a_hi:cmp_a_lo) con (cmp_b_hi:cmp_b_lo) como enteros de 16
+; bits CON signo. Al volver, el flag N queda en el estado correcto para
+; un `bmi` inmediatamente después: N=1 significa A < B. RTS no toca las
+; banderas, así que esto funciona igual que comparar en línea.
+.proc cmp16_signed
+    sec
+    lda cmp_a_lo
+    sbc cmp_b_lo
+    lda cmp_a_hi
+    sbc cmp_b_hi
+    bvc @noflip
+    eor #$80                ; corrige el signo si la resta desbordó (overflow con signo)
+@noflip:
+    rts
+.endproc
+
+; Física y animación de Chiquito (F3.2). Llamada una vez por frame desde
+; el main loop, después de read_controller1. Orden:
+;   1) Horizontal: acelera con input, frena con fricción si no hay input.
+;   2) Aplica velocidad horizontal a la posición.
+;   3) Vertical: gravedad, inicio de salto, corte de salto variable.
+;   4) Aplica velocidad vertical a la posición; aterriza en GROUND_Y
+;      (piso TEMPORAL -- no es colisión real contra tiles, eso es F3.3).
+;   5) Anima (idle/caminar según velocidad real) y actualiza el OAM.
+.proc update_player
+    lda pad1
+    and #PAD_RIGHT
+    bne @accel_right
+    lda pad1
+    and #PAD_LEFT
+    bne @accel_left
+    jmp @friction
+
+@accel_right:
+    clc
+    lda player_vx_lo
+    adc #<MOVE_ACCEL
+    sta player_vx_lo
+    lda player_vx_hi
+    adc #>MOVE_ACCEL
+    sta player_vx_hi
+    ; clamp: si vx > MOVE_MAX_SPEED, vx = MOVE_MAX_SPEED
+    lda player_vx_lo
+    sta cmp_a_lo
+    lda player_vx_hi
+    sta cmp_a_hi
+    lda #<MOVE_MAX_SPEED
+    sta cmp_b_lo
+    lda #>MOVE_MAX_SPEED
+    sta cmp_b_hi
+    jsr cmp16_signed         ; N=1 si vx < MOVE_MAX_SPEED (A=vx,B=MAX)
+    bmi @right_done
+    lda #<MOVE_MAX_SPEED
+    sta player_vx_lo
+    lda #>MOVE_MAX_SPEED
+    sta player_vx_hi
+@right_done:
+    lda #1
+    sta player_facing_right
+    jmp @apply_x
+
+@accel_left:
+    sec
+    lda player_vx_lo
+    sbc #<MOVE_ACCEL
+    sta player_vx_lo
+    lda player_vx_hi
+    sbc #>MOVE_ACCEL
+    sta player_vx_hi
+    ; clamp: si vx < -MOVE_MAX_SPEED, vx = -MOVE_MAX_SPEED
+    lda player_vx_lo
+    sta cmp_a_lo
+    lda player_vx_hi
+    sta cmp_a_hi
+    lda #<NEG_MOVE_MAX_SPEED
+    sta cmp_b_lo
+    lda #>NEG_MOVE_MAX_SPEED
+    sta cmp_b_hi
+    jsr cmp16_signed         ; N=1 si vx < -MAX (ya pasado el límite)
+    bpl @left_done
+    lda #<NEG_MOVE_MAX_SPEED
+    sta player_vx_lo
+    lda #>NEG_MOVE_MAX_SPEED
+    sta player_vx_hi
+@left_done:
+    lda #0
+    sta player_facing_right
+    jmp @apply_x
+
+@friction:
+    ; Empuja vx hacia 0 en MOVE_FRICTION, sin pasarse de 0 (si se pasa,
+    ; se fija en 0 exactamente en vez de oscilar alrededor de cero).
+    lda player_vx_hi
+    bmi @friction_negative
+    lda player_vx_lo
+    sec
+    sbc #<MOVE_FRICTION
+    sta player_vx_lo
+    lda player_vx_hi
+    sbc #>MOVE_FRICTION
+    sta player_vx_hi
+    bpl @apply_x
+    lda #0
+    sta player_vx_lo
+    sta player_vx_hi
+    jmp @apply_x
+@friction_negative:
+    lda player_vx_lo
+    clc
+    adc #<MOVE_FRICTION
+    sta player_vx_lo
+    lda player_vx_hi
+    adc #>MOVE_FRICTION
+    sta player_vx_hi
+    bmi @apply_x
+    lda #0
+    sta player_vx_lo
+    sta player_vx_hi
+
+@apply_x:
+    clc
+    lda player_x_lo
+    adc player_vx_lo
+    sta player_x_lo
+    lda player_x_hi
+    adc player_vx_hi
+    sta player_x_hi
+
+    ; --- Vertical: gravedad ---
+    clc
+    lda player_vy_lo
+    adc #<GRAVITY
+    sta player_vy_lo
+    lda player_vy_hi
+    adc #>GRAVITY
+    sta player_vy_hi
+    ; clamp: si vy > MAX_FALL_SPEED, vy = MAX_FALL_SPEED
+    lda player_vy_lo
+    sta cmp_a_lo
+    lda player_vy_hi
+    sta cmp_a_hi
+    lda #<MAX_FALL_SPEED
+    sta cmp_b_lo
+    lda #>MAX_FALL_SPEED
+    sta cmp_b_hi
+    jsr cmp16_signed
+    bmi @gravity_done
+    lda #<MAX_FALL_SPEED
+    sta player_vy_lo
+    lda #>MAX_FALL_SPEED
+    sta player_vy_hi
+@gravity_done:
+
+    ; Inicio de salto: A recién presionado Y parado en el piso.
+    lda pad1_pressed
+    and #PAD_A
+    beq @no_jump_start
+    lda player_on_ground
+    beq @no_jump_start
+    lda #<JUMP_VELOCITY
+    sta player_vy_lo
+    lda #>JUMP_VELOCITY
+    sta player_vy_hi
+    lda #0
+    sta player_on_ground
+@no_jump_start:
+
+    ; Corte de salto variable: si A ya NO está sostenido y Chiquito sigue
+    ; subiendo (vy negativo) más rápido que JUMP_CUT_SPEED_NEG, recorta vy
+    ; a ese valor -- soltar A antes hace un salto más corto.
+    lda pad1
+    and #PAD_A
+    bne @apply_y
+    lda player_vy_hi
+    bpl @apply_y             ; vy >= 0: ya no sube, nada que recortar
+    ; Ambos valores son negativos aquí: comparar solo el byte alto sin
+    ; signo da el mismo orden que compararlos con signo (ver nota).
+    cmp #>JUMP_CUT_SPEED_NEG
+    bcs @apply_y             ; vy_hi >= byte alto del recorte: ya es más lento
+    lda #<JUMP_CUT_SPEED_NEG
+    sta player_vy_lo
+    lda #>JUMP_CUT_SPEED_NEG
+    sta player_vy_hi
+
+@apply_y:
+    clc
+    lda player_y_lo
+    adc player_vy_lo
+    sta player_y_lo
+    lda player_y_hi
+    adc player_vy_hi
+    sta player_y_hi
+
+    ; Piso temporal (F3.2; colisión real contra tiles es F3.3).
+    lda player_y_hi
+    cmp #GROUND_Y
+    bcc @animate             ; todavía arriba del piso
+    lda #GROUND_Y
+    sta player_y_hi
+    lda #0
+    sta player_y_lo
+    sta player_vy_lo
+    sta player_vy_hi
+    lda #1
+    sta player_on_ground
+
+@animate:
+    ; Tile: idle si vx es exactamente 0, si no alterna con caminar según
+    ; frame_count (ciclo de caminata), para que se vea en movimiento.
+    lda player_vx_lo
+    ora player_vx_hi
+    beq @set_idle
+    lda frame_count
+    and #%00001000
+    beq @set_idle
+    lda #TILE_CHIQUITO_WALK
+    jmp @set_tile
+@set_idle:
+    lda #TILE_CHIQUITO_IDLE
+@set_tile:
+    sta oam_buffer+1
+
+    ; Flip horizontal según hacia dónde mira (subpaleta 0 = jugador, sin
+    ; otros bits que preservar).
+    lda player_facing_right
+    bne @facing_right
+    lda #%01000000           ; bit6 = flip horizontal
+    jmp @set_attr
+@facing_right:
+    lda #%00000000
+@set_attr:
+    sta oam_buffer+2
+
+    ; Posición real -> OAM (byte alto de cada coordenada en punto fijo).
+    lda player_y_hi
+    sta oam_buffer+0
+    lda player_x_hi
+    sta oam_buffer+3
+
     rts
 .endproc
 

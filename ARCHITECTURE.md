@@ -178,6 +178,14 @@ El color índice 0 de las 4 subpaletas de fondo (`$3F00`, `$3F04`, `$3F08`, `$3F
 - Hitbox del jugador: definida como constante (8x8, sin margen) en `src/main.s`, pero sin consumir todavía — el sistema de colisión real es F3.3.
 - Límite de sprites por scanline (hardware): 8 máximo. Con 3 sprites totales, muy por debajo; se revisará activamente cuando haya más entidades simultáneas (Fase 5+).
 
+### Física del jugador y punto fijo (decidido — F3.2, 2026-11-10)
+
+- **Formato de punto fijo: 8.8.** Cada valor de posición/velocidad es de 16 bits: byte alto = píxeles enteros, byte bajo = fracción de píxel (256 = 1 píxel). Se usa tanto para posición (`player_x`, `player_y`) como para velocidad (`player_vx`, `player_vy`), con velocidad en complemento a 2 (con signo).
+- **Comparación de 16 bits con signo:** `cmp16_signed` implementa el idiom estándar de resta + corrección por overflow (XOR con `$80` si V=1) para clamps de velocidad donde el signo del operando varía (ej. velocidad horizontal, que puede ser positiva o negativa según la dirección). Para comparaciones donde YA se sabe que ambos operandos son negativos (ej. el corte de salto variable), comparar solo el byte alto sin signo es válido y más simple — el orden se preserva cuando ambos valores están en el mismo "lado" del rango.
+- **Piso temporal:** `GROUND_Y` es una constante fija (no colisión real contra tiles) hasta que F3.3 implemente colisión real contra `scene_pradera`. Documentado explícitamente en el código para que no se confunda con un sistema de colisión terminado.
+- **Parámetros de física** (ajustables sin tocar lógica): `MOVE_ACCEL`, `MOVE_FRICTION`, `MOVE_MAX_SPEED`, `GRAVITY`, `MAX_FALL_SPEED`, `JUMP_VELOCITY`, `JUMP_CUT_SPEED_NEG` — todos en `src/main.s`, documentados con su valor en px/frame o px/frame².
+- **Salto variable:** soltar A mientras `vy` es más negativo que `JUMP_CUT_SPEED_NEG` lo recorta a ese valor — confirmado por prueba automatizada que un salto corto alcanza menos altura que uno largo.
+
 ## 10. Rendimiento
 
 Prioridades:

@@ -1,0 +1,35 @@
+Componente	Características
+CPU	Ricoh 2A03, basada en 6502
+Frecuencia CPU NTSC	~1.79 MHz
+RAM interna	2 KB
+PPU	Procesador gráfico 2C02
+Resolución	256 × 240 píxeles
+Colores	Paleta de 54 colores, con restricciones de visualización
+Sprites	Máximo 64
+Sprites por scanline	Máximo 8
+Tamaño de sprite	8×8 o 8×16
+Audio	5 canales principales
+ROM	Depende del cartucho y mapper
+Una particularidad fundamental: NES no funciona como una computadora moderna que dibuja cada píxel directamente en un framebuffer. Trabaja con tiles, atributos, patrones gráficos y registros de hardware.
+2. Técnicas de programación que debes dominar
+A. Programación del procesador 6502
+Es la base de todo el desarrollo para NES.
+
+Debes dominar:
+Técnica	Aplicación
+Registros A, X, Y	Variables y operaciones
+Stack	Llamadas y almacenamiento temporal
+Zero Page	Variables de acceso rápido
+Direccionamiento absoluto	Acceso a memoria
+Direccionamiento indirecto	Tablas y estructuras
+ADC / SBC	Aritmética
+AND / ORA / EOR	Operaciones binarias
+ASL / LSR / ROL / ROR	Desplazamientos y multiplicaciones
+CMP / CPX / CPY	Comparaciones
+JMP / JSR / RTS	Flujo del programa
+NMI / IRQ	Sincronización y eventos
+Tablas Lookup	Cálculos rápidos sin operaciones costosas
+
+Una técnica especialmente importante es utilizar Fixed Point Arithmetic para trabajar con velocidades y posiciones decimales sin disponer de un procesador con operaciones de punto flotante.
+
+Ejemplo: representar la velocidad 2.5 como un valor entero escalado

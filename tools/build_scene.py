@@ -92,6 +92,15 @@ def build_scene_grid():
     grid[8][1] = "WALL"
     grid[9][1] = "WALL"
 
+    # Hueco de prueba (F3.4): quita el suelo en 2 columnas completas
+    # (todas las filas, no solo la superficie) para poder caer hasta la
+    # condición de "muerte por caída" (ver DEATH_Y_THRESHOLD en
+    # src/main.s) y probar la reaparición. Dos columnas, no una, para que
+    # ambas esquinas del hitbox queden sobre el hueco a la vez.
+    for row in range(10, MT_ROWS):
+        grid[row][13] = "SKY"
+        grid[row][14] = "SKY"
+
     # Techo de prueba (F3.3): bloque sólido flotando sobre el punto de
     # aparición, lo bastante bajo para que un salto largo lo alcance --
     # para probar colisión vertical saltando hacia arriba.

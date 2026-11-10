@@ -1,11 +1,18 @@
 -- Prueba de humo para F2.1 (paletas).
--- Verifica, de forma automatizada, que las 3 bandas de fondo (cielo,
--- pradera, tierra) se ven en pantalla como 3 colores distintos y que
--- ninguno es negro (lo que confirmaría que la paleta real sí se cargó y
--- que el banco de CHR correcto está seleccionado en el mapper). Usa
--- emu.getscreenpixel, que lee el framebuffer real — gui.getpixel lee una
--- capa de overlay separada y no sirve para esto (se comprobó
+-- Verifica, de forma automatizada, que 3 subpaletas de fondo distintas
+-- (cielo, pradera, tierra) se ven en pantalla como 3 colores distintos y
+-- que ninguno es negro (lo que confirmaría que la paleta real sí se
+-- cargó y que el banco de CHR correcto está seleccionado en el mapper).
+-- Usa emu.getscreenpixel, que lee el framebuffer real — gui.getpixel lee
+-- una capa de overlay separada y no sirve para esto (se comprobó
 -- empíricamente durante el desarrollo de esta prueba).
+--
+-- Actualizado en F3.3: los puntos originales de "pradera" (128,140) y
+-- "tierra" (128,205) muestreaban cielo/pradera respectivamente desde que
+-- F2.2 reemplazó las 3 bandas planas por la escena real (el cielo ahora
+-- ocupa casi toda la pantalla, el suelo solo empieza en la fila de
+-- metatiles 10). La subpaleta de tierra solo se usa de verdad desde
+-- F3.3, en la pared de prueba (columna 1, filas 7-9).
 
 local out = io.open("/tmp/fceux_test_palette.txt", "w")
 local function log(line)
@@ -23,8 +30,8 @@ local function sample(name, x, y)
 end
 
 local sr, sg, sb = sample("cielo", 128, 40)
-local gr, gg, gb = sample("pradera", 128, 140)
-local dr, dg, db = sample("tierra", 128, 205)
+local gr, gg, gb = sample("pradera", 64, 165)
+local dr, dg, db = sample("tierra", 24, 150)
 
 local function is_black(r, g, b)
 	return r == 0 and g == 0 and b == 0

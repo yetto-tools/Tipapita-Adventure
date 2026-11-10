@@ -55,10 +55,18 @@
 ; `get_tile_collision` resuelve qué tipo hay en un punto dado, y
 ; `update_player` revisa las esquinas del hitbox del jugador por eje
 ; (horizontal primero, luego vertical) después de aplicar la velocidad.
-; Las plataformas solo bloquean cayendo (vy>=0); los peligros no
-; bloquean el movimiento, pero hacen reaparecer a Chiquito en
-; (SPAWN_X,SPAWN_Y) -- es un placeholder de "daño" hasta que exista un
-; sistema de vida real (Fase 5/6), documentado como tal.
+; Las plataformas solo bloquean cayendo (vy>=0).
+;
+; F3.4 (máquina de estados): `player_state` (STATE_*) formaliza lo que
+; antes era implícito. IDLE/WALK/JUMP/FALL se recalculan cada frame
+; desde la física (`recompute_normal_state`); ATTACK/HURT/DEAD duran
+; exactamente *_DURATION frames y salen solos al expirar su temporizador
+; -- ningún estado queda trabado. Tocar un peligro ya no reaparece de
+; inmediato: entra en HURT con knockback real y parpadeo de
+; invulnerabilidad; caerse de la pantalla visible entra en DEAD
+; (congelado) y, al expirar, `respawn_player` reaparece a Chiquito en
+; (SPAWN_X,SPAWN_Y). ATTACK (botón B) "enraíza" el movimiento horizontal
+; -- todavía no hay arma/hitbox de ataque real (eso es F5.3).
 
 .include "data/palettes.s"
 .include "../dist/tiles_pradera.s"
@@ -95,6 +103,36 @@ COLLISION_EMPTY    = 0
 COLLISION_SOLID    = 1
 COLLISION_PLATFORM = 2
 COLLISION_HAZARD   = 3
+
+; Estados del jugador (F3.4). IDLE/WALK/JUMP/FALL se recalculan cada
+; frame a partir de la física (on_ground, vx, vy) cuando no hay un
+; estado con temporizador propio en curso; ATTACK/HURT/DEAD duran
+; exactamente *_DURATION frames y luego salen solos -- ningún estado
+; puede quedarse trabado indefinidamente.
+STATE_IDLE   = 0
+STATE_WALK   = 1
+STATE_JUMP   = 2
+STATE_FALL   = 3
+STATE_ATTACK = 4
+STATE_HURT   = 5
+STATE_DEAD   = 6
+
+ATTACK_DURATION = 14   ; ~0.23s: sin arma/hitbox real todavía (F5.3) -- solo "enraíza" el movimiento
+HURT_DURATION   = 30   ; ~0.5s de invulnerabilidad con parpadeo tras tocar un peligro
+DEAD_DURATION   = 40   ; ~0.67s congelado antes de reaparecer
+
+; 4.0 px/frame: con MOVE_FRICTION decayendo a este ritmo, el empuje debe
+; alejar a Chiquito más allá del ancho de un metatile (16px) para que no
+; quede rebotando contra el mismo peligro apenas termina HURT_DURATION
+; (con 2.0 px/frame no alcanzaba a salir del tile -- confirmado con
+; prueba automatizada antes de subir este valor).
+KNOCKBACK_VX     = $0400
+NEG_KNOCKBACK_VX = $FC00   ; -4.0 px/frame en complemento a 2 de 16 bits
+KNOCKBACK_VY     = $FC00   ; -4.0 px/frame, empuje vertical (mismo valor que JUMP_VELOCITY)
+
+; Si Y pasa de esto, Chiquito se cayó de la pantalla visible (256x224) --
+; "muerte por caída" sin necesitar un sistema de vida real todavía.
+DEATH_Y_THRESHOLD = 224
 
 ; Bits del byte normalizado de mando (orden estándar de NES: el primer
 ; botón leído -- A -- termina en el bit más alto, por cómo se arma el
@@ -161,6 +199,8 @@ player_vy_lo: .res 1
 player_vy_hi: .res 1
 player_on_ground:    .res 1   ; 1 = parado sobre suelo/plataforma sólida
 player_facing_right: .res 1   ; 1 = mirando a la derecha (para el flip del sprite)
+player_state: .res 1          ; STATE_* (F3.4)
+state_timer:  .res 1          ; frames restantes del estado actual (solo ATTACK/HURT/DEAD lo usan)
 
 ; Escratch para cmp16_signed: no deben usarse para nada más.
 cmp_a_lo: .res 1
@@ -305,6 +345,8 @@ oam_buffer: .res 256  ; página $0200-$02FF, fuente de la OAM DMA ($4014)
     sta player_vx_hi
     sta player_vy_lo
     sta player_vy_hi
+    sta state_timer
+    sta player_state         ; STATE_IDLE = 0
 
     ; Segundo VBlank: la PPU ya está estable para recibir escrituras seguras.
 @vblankwait2:
@@ -509,6 +551,60 @@ mainloop:
 ;      hasta que exista un sistema de vida real (Fase 5/6).
 ;   8) Anima (idle/caminar según velocidad real) y actualiza el OAM.
 .proc update_player
+    ; --- F3.4: estados con temporizador propio (DEAD/HURT/ATTACK) ---
+    ; Tienen prioridad: cuentan su propio reloj y SIEMPRE salen solos al
+    ; llegar a 0 (ver recompute_normal_state) -- ningún estado puede
+    ; quedar trabado indefinidamente.
+    lda player_state
+    cmp #STATE_DEAD
+    bne @not_dead
+    dec state_timer
+    bne @still_dead
+    jsr respawn_player
+@still_dead:
+    rts                      ; congelado: nada más corre mientras está muerto
+@not_dead:
+
+    cmp #STATE_HURT
+    bne @not_hurt
+    dec state_timer
+    bne @movement_start
+    jsr recompute_normal_state
+    jmp @movement_start
+@not_hurt:
+
+    cmp #STATE_ATTACK
+    bne @not_attack
+    dec state_timer
+    bne @movement_start
+    jsr recompute_normal_state
+    jmp @movement_start
+@not_attack:
+
+    ; Estado normal (IDLE/WALK/JUMP/FALL): ¿se presiona B para atacar?
+    ; Sin arma/hitbox real todavía (eso es F5.3) -- por ahora ATTACK solo
+    ; "enraíza" el movimiento horizontal, un comportamiento real y
+    ; verificable aunque no haga daño todavía.
+    lda pad1_pressed
+    and #PAD_B
+    beq @movement_start
+    lda #STATE_ATTACK
+    sta player_state
+    lda #ATTACK_DURATION
+    sta state_timer
+
+@movement_start:
+    ; HURT y ATTACK bloquean el input horizontal/de salto (fricción y
+    ; gravedad/colisión siguen corriendo normal, para que el knockback de
+    ; HURT se vea de verdad).
+    lda player_state
+    cmp #STATE_HURT
+    beq @input_blocked
+    cmp #STATE_ATTACK
+    bne @input_allowed
+@input_blocked:
+    jmp @friction
+@input_allowed:
     lda pad1
     and #PAD_RIGHT
     bne @accel_right
@@ -699,7 +795,12 @@ mainloop:
     sta player_vy_hi
 @gravity_done:
 
-    ; Inicio de salto: A recién presionado Y parado en el piso.
+    ; Inicio de salto: A recién presionado Y parado en el piso. No se
+    ; puede saltar durante HURT (el knockback debe sentirse como tal, sin
+    ; poder cancelarlo saltando); ATTACK sí puede saltar (jump-cancel).
+    lda player_state
+    cmp #STATE_HURT
+    beq @no_jump_start
     lda pad1_pressed
     and #PAD_A
     beq @no_jump_start
@@ -815,10 +916,16 @@ mainloop:
     sta player_vy_hi
 
 @vcol_done:
-    ; --- Peligro (F3.3): revisa las 4 esquinas del hitbox. No bloquea el
-    ; movimiento; si toca, Chiquito reaparece en el punto de inicio --
-    ; placeholder de "daño" hasta que exista un sistema de vida real
-    ; (Fase 5/6). ---
+    ; --- Peligro (F3.4): si no está ya en HURT/DEAD, revisa las 4
+    ; esquinas del hitbox. No bloquea el movimiento; si toca, entra en
+    ; HURT con knockback -- placeholder de "daño" hasta que exista un
+    ; sistema de vida real (Fase 5/6); la reaparición real pasa en DEAD.
+    lda player_state
+    cmp #STATE_HURT
+    beq @hazard_skip
+    cmp #STATE_DEAD
+    beq @hazard_skip
+
     lda player_x_hi
     sta col_x
     lda player_y_hi
@@ -847,36 +954,90 @@ mainloop:
     sta col_x
     jsr get_tile_collision   ; col_y sigue siendo el borde inferior
     cmp #COLLISION_HAZARD
-    bne @animate
+    bne @hazard_skip
 
 @hazard_hit:
-    lda #SPAWN_X
-    sta player_x_hi
-    lda #SPAWN_Y
-    sta player_y_hi
+    lda #STATE_HURT
+    sta player_state
+    lda #HURT_DURATION
+    sta state_timer
     lda #0
-    sta player_x_lo
-    sta player_y_lo
+    sta player_on_ground
+    lda player_facing_right
+    bne @knockback_left
+    lda #<KNOCKBACK_VX
+    sta player_vx_lo
+    lda #>KNOCKBACK_VX
+    sta player_vx_hi
+    jmp @knockback_vy
+@knockback_left:
+    lda #<NEG_KNOCKBACK_VX
+    sta player_vx_lo
+    lda #>NEG_KNOCKBACK_VX
+    sta player_vx_hi
+@knockback_vy:
+    lda #<KNOCKBACK_VY
+    sta player_vy_lo
+    lda #>KNOCKBACK_VY
+    sta player_vy_hi
+
+@hazard_skip:
+    ; --- Muerte por caída (F3.4): si Y pasa el umbral y no está ya en
+    ; DEAD, congela a Chiquito hasta que expire el temporizador --
+    ; respawn_player lo reaparece (ver el chequeo de STATE_DEAD al
+    ; principio de este proc). ---
+    lda player_state
+    cmp #STATE_DEAD
+    beq @death_skip
+    lda player_y_hi
+    cmp #DEATH_Y_THRESHOLD
+    bcc @death_skip
+    lda #STATE_DEAD
+    sta player_state
+    lda #DEAD_DURATION
+    sta state_timer
+    lda #0
     sta player_vx_lo
     sta player_vx_hi
     sta player_vy_lo
     sta player_vy_hi
-    lda #1
-    sta player_on_ground
+@death_skip:
+
+    ; Si no está en un estado con temporizador propio, recalcula
+    ; IDLE/WALK/JUMP/FALL a partir de la física que se acaba de resolver.
+    lda player_state
+    cmp #STATE_HURT
+    beq @skip_recompute
+    cmp #STATE_ATTACK
+    beq @skip_recompute
+    cmp #STATE_DEAD
+    beq @skip_recompute
+    jsr recompute_normal_state
+@skip_recompute:
 
 @animate:
-    ; Tile: idle si vx es exactamente 0, si no alterna con caminar según
-    ; frame_count (ciclo de caminata), para que se vea en movimiento.
-    lda player_vx_lo
-    ora player_vx_hi
-    beq @set_idle
+    ; Tile según el estado. IDLE/JUMP/FALL/HURT/DEAD reutilizan el tile
+    ; idle (sin arte dedicado todavía para salto/caída/daño/muerte);
+    ; WALK alterna con caminar según frame_count (ciclo de caminata);
+    ; ATTACK reutiliza el tile de caminar como diferenciador visual.
+    lda player_state
+    cmp #STATE_WALK
+    beq @anim_walk
+    cmp #STATE_ATTACK
+    beq @anim_attack
+    lda #TILE_CHIQUITO_IDLE
+    jmp @set_tile
+@anim_walk:
     lda frame_count
     and #%00001000
-    beq @set_idle
+    beq @anim_use_idle
     lda #TILE_CHIQUITO_WALK
     jmp @set_tile
-@set_idle:
+@anim_use_idle:
     lda #TILE_CHIQUITO_IDLE
+    jmp @set_tile
+@anim_attack:
+    lda #TILE_CHIQUITO_WALK
 @set_tile:
     sta oam_buffer+1
 
@@ -897,6 +1058,68 @@ mainloop:
     lda player_x_hi
     sta oam_buffer+3
 
+    ; Parpadeo durante HURT (invulnerabilidad visual): oculta el sprite
+    ; la mitad de los frames, técnica estándar de NES. Sin esto no habría
+    ; forma de distinguir cuándo sigue invulnerable.
+    lda player_state
+    cmp #STATE_HURT
+    bne @no_blink
+    lda state_timer
+    and #%00000100
+    bne @no_blink
+    lda #$FF
+    sta oam_buffer+0         ; Y=$FF: oculta el sprite este frame
+@no_blink:
+
+    rts
+.endproc
+
+; Reaparece a Chiquito en (SPAWN_X, SPAWN_Y), limpio de velocidad, y
+; vuelve a STATE_IDLE. Usado al expirar STATE_DEAD.
+.proc respawn_player
+    lda #SPAWN_X
+    sta player_x_hi
+    lda #SPAWN_Y
+    sta player_y_hi
+    lda #0
+    sta player_x_lo
+    sta player_y_lo
+    sta player_vx_lo
+    sta player_vx_hi
+    sta player_vy_lo
+    sta player_vy_hi
+    lda #STATE_IDLE
+    sta player_state
+    lda #1
+    sta player_on_ground
+    rts
+.endproc
+
+; Recalcula player_state a IDLE/WALK/JUMP/FALL según player_on_ground y
+; la velocidad actual. Solo debe llamarse cuando el estado actual NO es
+; ATTACK/HURT/DEAD (esos administran su propia salida por temporizador).
+.proc recompute_normal_state
+    lda player_on_ground
+    beq @airborne
+    lda player_vx_lo
+    ora player_vx_hi
+    beq @set_idle
+    lda #STATE_WALK
+    sta player_state
+    rts
+@set_idle:
+    lda #STATE_IDLE
+    sta player_state
+    rts
+@airborne:
+    lda player_vy_hi
+    bmi @set_jump
+    lda #STATE_FALL
+    sta player_state
+    rts
+@set_jump:
+    lda #STATE_JUMP
+    sta player_state
     rts
 .endproc
 

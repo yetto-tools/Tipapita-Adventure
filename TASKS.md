@@ -269,16 +269,27 @@
 - **Bug real encontrado y corregido durante esta tarea (resuelve también la nota de F3.2):** el "hallazgo de entorno sin impacto funcional" documentado en el registro de F3.2 (una ventana transitoria de ~45 frames con velocidad residual tras el arranque) SÍ tenía impacto real una vez que la colisión podía reaccionar a esos valores — se confirmó que no era un artefacto cosmético sino velocidad real (decayendo exactamente a razón de `MOVE_FRICTION` por frame) que desplazaba a Chiquito una distancia significativa antes de asentarse. Corregido re-inicializando explícitamente `player_vx`/`player_vy` a 0 en `reset`, inmediatamente antes de caer en el main loop (redundante con la limpieza de RAM anterior, pero cierra la ventana de forma defensiva). Confirmado con prueba automatizada: tras el fix, `vx`/`vy` leen exactamente 0 desde el primer frame real.
 - Limitaciones pendientes: la pared/techo/peligro de prueba son parte de la escena de prueba técnica (`build_scene.py`), no diseño de nivel real. La colisión revisa solo las esquinas del hitbox (suficiente para un hitbox de 8x8 contra metatiles de 16x16, pero no generaliza a hitboxes más grandes sin revisarlo de nuevo). No hay sistema de vida real todavía (el peligro solo reaparece, no resta HP). No probado en hardware real.
 
-## F3.4 Máquina de estados [P1]
-- [ ] Idle.
-- [ ] Walk/run.
-- [ ] Jump/fall/land.
-- [ ] Attack.
-- [ ] Hurt/knockback.
-- [ ] Dead.
-- [ ] Conectar estados con animaciones.
+## F3.4 Máquina de estados [P1] — Implementada, compilada, probada en emulador (2026-11-10)
+- [x] Idle. (`STATE_IDLE`: en el piso, sin velocidad horizontal)
+- [x] Walk/run. (`STATE_WALK`: en el piso, con velocidad horizontal — un solo nivel de velocidad, no hay "run" distinto todavía)
+- [x] Jump/fall/land. (`STATE_JUMP` subiendo, `STATE_FALL` cayendo; "land" es la transición instantánea de vuelta a IDLE/WALK al tocar el suelo, no un estado propio con animación)
+- [x] Attack. (`STATE_ATTACK`: botón B, `ATTACK_DURATION` frames, enraíza el movimiento horizontal — sin arma/hitbox real todavía, eso es F5.3)
+- [x] Hurt/knockback. (`STATE_HURT`: al tocar un peligro, `HURT_DURATION` frames de knockback real + parpadeo de invulnerabilidad, reemplaza el respawn instantáneo de F3.3)
+- [x] Dead. (`STATE_DEAD`: al caer de la pantalla visible, `DEAD_DURATION` frames congelado, luego `respawn_player` reaparece en el punto de inicio)
+- [x] Conectar estados con animaciones. (tabla de tiles por estado en `@animate`; IDLE/JUMP/FALL/HURT/DEAD reutilizan el tile idle, WALK alterna con el de caminar, ATTACK reutiliza el de caminar como diferenciador — sin arte dedicado todavía para salto/caída/ataque/daño/muerte)
 
 **Aceptación:** transiciones deterministas y sin estados bloqueados.
+
+**Registro de la tarea:**
+- Archivos: `src/main.s` (constantes `STATE_*`/`*_DURATION`/`KNOCKBACK_*`/`DEATH_Y_THRESHOLD`, variables `player_state`/`state_timer`, `update_player` reestructurado con gating de input por estado, `respawn_player`, `recompute_normal_state`), `tools/build_scene.py` (hueco de prueba de 2 columnas para la condición de muerte por caída), `tools/test_state_machine.lua` (nuevo). Se actualizaron `tools/test_sprites.lua` y `tools/test_palette.lua`, que asumían cosas ya obsoletas (posición estática de Chiquito, animación por tiempo fijo, un punto de muestreo de "tierra"/"pradera" que en realidad caía en cielo desde F2.2) — ver "Limpieza de pruebas" abajo.
+- Comando de build: `make clean && make rom`.
+- Resultado de compilación: éxito, mismo header/tamaño de ROM.
+- Prueba ejecutada: `fceux --loadlua tools/test_state_machine.lua dist/chiquito.nes`.
+- Resultado observado (6 casos, todos `true`): aparece en `STATE_IDLE`; sostener Right pasa a `STATE_WALK`; saltar pasa por `STATE_JUMP` y `STATE_FALL` y aterriza de vuelta en IDLE/WALK; presionar B entra en `STATE_ATTACK` y de verdad enraíza el movimiento horizontal (sostener Right durante el ataque no mueve a Chiquito; sí lo mueve apenas termina); tocar el peligro entra en `STATE_HURT` con parpadeo visible (`oam_buffer+0=$FF` en algunos frames); caer en el hueco de prueba entra en `STATE_DEAD` y, tras expirar el temporizador, reaparece exactamente en `(96,152)` con `STATE_IDLE`. `RESULT=PASS`.
+- **Bug real encontrado y corregido:** el chequeo de "recalcular estado normal" (al final de `update_player`) excluía `STATE_HURT`/`STATE_ATTACK` pero **olvidaba excluir `STATE_DEAD`** — `recompute_normal_state` sobrescribía el estado DEAD de vuelta a FALL/JUMP en el mismo frame en que se activaba, así que Chiquito nunca quedaba realmente congelado ni reaparecía (quedaba cayendo para siempre). Encontrado con una traza frame a frame automatizada (no a simple vista); corregido agregando la exclusión de `STATE_DEAD` al guard.
+- **Ajuste de balance real:** el *knockback* inicial (`KNOCKBACK_VX=2.0px/frame`) no alcanzaba a sacar a Chiquito del ancho de un metatile de peligro (16px) antes de que `HURT_DURATION` expirara, así que sosteniendo Right sin soltar quedaba rebotando contra el mismo peligro indefinidamente (confirmado con prueba automatizada). Subido a `4.0px/frame`, suficiente para despejar el tile.
+- **Limpieza de pruebas (regresión):** `tools/test_sprites.lua` asumía la posición estática de Chiquito de F2.3 (antes de F3.2) y una animación que alternaba sola por tiempo — corregido para leer la posición real de `player_x/y_hi` y simular caminar de verdad con `joypad.set`. `tools/test_palette.lua` muestreaba "pradera"/"tierra" en puntos que en realidad caían en cielo desde que F2.2 reemplazó las 3 bandas de color planas por la escena real — corregido para muestrear el suelo real y la pared de prueba de F3.3 (única superficie que usa la subpaleta de tierra). Las 7 pruebas automatizadas del proyecto (`test_palette`, `test_tiles`, `test_sprites`, `test_controller`, `test_movement`, `test_collision`, `test_state_machine`) pasan juntas tras estos ajustes.
+- Limitaciones pendientes: sin arma/hitbox de ataque real (F5.3); sin sistema de vida real, el peligro/caída solo dan knockback/respawn (Fase 5/6); sin tiles de arte dedicados para salto/caída/ataque/daño/muerte (reutilizan idle/caminar). No probado en hardware real.
 
 ---
 

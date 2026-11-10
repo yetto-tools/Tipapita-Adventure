@@ -1,12 +1,18 @@
--- Prueba de humo para F2.3 (sprites).
+-- Prueba de humo para F2.3 (sprites), actualizada en F3.4 para seguir
+-- la posición real de Chiquito en vez de una coordenada fija (desde
+-- F3.2 el punto de aparición cambió, y desde F3.4 la animación depende
+-- del estado real -- caminar de verdad -- no de un parpadeo por tiempo
+-- fijo).
 -- Verifica, de forma automatizada:
---   1. Que los 3 sprites (Chiquito, enemigo, coleccionable) se ven en
---      sus posiciones esperadas con colores distintos del fondo.
---   2. Que la animación de Chiquito realmente alterna entre el tile de
---      idle y el de caminar a lo largo del tiempo (no un valor fijo).
+--   1. Que los 3 sprites (Chiquito, enemigo, coleccionable) se ven con
+--      colores distintos del fondo.
+--   2. Que la animación de Chiquito alterna entre el tile de idle y el
+--      de caminar cuando realmente camina (sosteniendo Right).
 --   3. Que no se activó el flag de desborde de sprites por scanline
 --      ($2002 bit 5) -- tenemos muy pocos sprites, así que esto debería
 --      cumplirse siempre, pero se valida el mecanismo real, no se asume.
+
+local X_HI, Y_HI, VX_HI, VX_LO, VY_HI, VY_LO = 0x000D, 0x000F, 0x0011, 0x0010, 0x0013, 0x0012
 
 local out = io.open("/tmp/fceux_test_sprites.txt", "w")
 local function log(line)
@@ -26,25 +32,32 @@ local function is_green_ground(r, g, b)
 	return r == 0 and g == 150 and b == 0
 end
 
--- frame_count tarda unos ~6 frames en empezar a avanzar (el reset ahora
--- hace bastante trabajo: limpieza de RAM, relleno de OAM, paletas,
--- escena de 960+64 bytes). bit4 de frame_count alterna cada 16 cuentas;
--- se muestrea bien adentro de una ventana "idle" (<16) y de una
--- ventana "caminar" (16-31) para no quedar justo en el borde.
-for _ = 1, 14 do
+-- Deja que termine el reset y decaiga cualquier residuo de velocidad
+-- (ver F3.2/F3.3 en TASKS.md). frame_count >= 5 confirma mainloop
+-- corriendo de verdad.
+for i = 1, 100 do
+	joypad.set(1, {})
 	emu.frameadvance()
+	if memory.readbyte(0x0001) >= 5 and memory.readbyte(VX_HI) == 0 and memory.readbyte(VX_LO) == 0
+		and memory.readbyte(VY_HI) == 0 and memory.readbyte(VY_LO) == 0 then
+		break
+	end
 end
-local tile_a = memory.readbyte(0x0201) -- oam_buffer+1 = byte de tile del sprite 0
-local fc_a = memory.readbyte(0x0001)
 
-for _ = 1, 21 do
+local tile_idle = memory.readbyte(0x0201) -- oam_buffer+1, en reposo
+
+-- Camina a la derecha: la animación debe alternar idle/caminar.
+local saw_walk_tile = false
+local tile_walking
+for _ = 1, 30 do
+	joypad.set(1, { right = true })
 	emu.frameadvance()
+	tile_walking = memory.readbyte(0x0201)
+	if tile_walking ~= tile_idle then saw_walk_tile = true end
 end
-local tile_b = memory.readbyte(0x0201)
-local fc_b = memory.readbyte(0x0001)
-log(string.format("frame_count_a=%d frame_count_b=%d", fc_a, fc_b))
 
-local cr, cg, cb = sample("chiquito", 104, 184)
+local px, py = memory.readbyte(X_HI), memory.readbyte(Y_HI)
+local cr, cg, cb = sample("chiquito", px + 4, py + 4)
 local er, eg, eb = sample("enemigo", 184, 184)
 local ir_, ig, ib = sample("item", 144, 104)
 
@@ -53,7 +66,7 @@ local ir_, ig, ib = sample("item", 144, 104)
 -- índice 1 sí distingue jugador ($27, tan) de enemigo ($06, rojo
 -- oscuro). Confirma que la subpaleta de sprite seleccionada por
 -- atributo realmente aplica.
-local cor, cog, cob = sample("chiquito_oreja", 101, 181)
+local cor, cog, cob = sample("chiquito_oreja", px + 1, py + 1)
 local eor, eog, eob = sample("enemigo_oreja", 181, 181)
 local subpalette_differs = not (cor == eor and cog == eog and cob == eob)
 
@@ -61,20 +74,18 @@ local sprites_distinct_from_bg = not is_blue_sky(cr, cg, cb) and not is_green_gr
 	and not is_blue_sky(er, eg, eb) and not is_green_ground(er, eg, eb)
 	and not is_blue_sky(ir_, ig, ib) and not is_green_ground(ir_, ig, ib)
 
-local animation_toggles = tile_a ~= tile_b
-
 local ppustatus = memory.readbyte(0x2002)
 local sprite_overflow = (math.floor(ppustatus / 32) % 2) == 1
 
-log(string.format("tile_a=%d tile_b=%d", tile_a, tile_b))
-log("animacion_alterna=" .. tostring(animation_toggles))
+log(string.format("tile_idle=%d tile_walking(ultimo)=%d", tile_idle, tile_walking))
+log("animacion_alterna_al_caminar=" .. tostring(saw_walk_tile))
 log("sprites_distintos_del_fondo=" .. tostring(sprites_distinct_from_bg))
 log("subpaleta_jugador_distinta_de_enemigo=" .. tostring(subpalette_differs))
 log("sprite_overflow=" .. tostring(sprite_overflow))
 
 gui.savescreenshotas("/tmp/fceux_test_sprites.png")
 
-local pass = sprites_distinct_from_bg and animation_toggles and subpalette_differs and not sprite_overflow
+local pass = sprites_distinct_from_bg and saw_walk_tile and subpalette_differs and not sprite_overflow
 log("RESULT=" .. (pass and "PASS" or "FAIL"))
 out:close()
 emu.exit()

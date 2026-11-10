@@ -195,6 +195,15 @@ El color índice 0 de las 4 subpaletas de fondo (`$3F00`, `$3F04`, `$3F08`, `$3F
 - **Peligro = placeholder de daño:** no hay sistema de vida todavía (Fase 5/6); tocar un metatile de peligro simplemente reaparece a Chiquito en el punto de inicio de la escena.
 - **Hallazgo real corregido:** la velocidad residual transitoria documentada como "sin impacto" en F3.2 sí tenía impacto real combinada con colisión (desplazaba a Chiquito una distancia significativa antes de asentarse). Corregido re-inicializando `player_vx`/`player_vy` a 0 explícitamente en `reset`, justo antes del main loop.
 
+### Máquina de estados del jugador (decidido — F3.4, 2026-11-10)
+
+- **Estados:** `STATE_IDLE`/`WALK`/`JUMP`/`FALL` se recalculan cada frame desde la física resuelta (`recompute_normal_state`, basada en `player_on_ground` y la velocidad). `STATE_ATTACK`/`HURT`/`DEAD` tienen un temporizador propio (`state_timer`) y SIEMPRE salen solos al llegar a 0 — ningún estado puede quedar trabado indefinidamente (ver bug real corregido abajo, que sí violaba esto).
+- **Gating de input por estado:** `HURT` y `ATTACK` bloquean el input horizontal/de salto (se fuerza el camino de fricción), pero gravedad y colisión siguen corriendo normal — así el knockback de `HURT` se ve como un knockback real, no como un teletransporte.
+- **Peligro → HURT, no respawn instantáneo:** tocar un metatile de peligro aplica knockback real (velocidad, no cambio de posición) y entra en `HURT` con parpadeo de invulnerabilidad. La reaparición real (`respawn_player`) solo pasa al expirar `STATE_DEAD`.
+- **Muerte por caída:** si `player_y_hi >= DEATH_Y_THRESHOLD` (más allá de la pantalla visible de 224px), entra en `STATE_DEAD` (congelado) sin necesitar un sistema de vida — placeholder hasta Fase 5/6, igual que el peligro.
+- **Bug real corregido:** el guard de "recalcular estado normal" olvidaba excluir `STATE_DEAD`, así que `recompute_normal_state` sobrescribía DEAD de vuelta a FALL en el mismo frame — Chiquito nunca llegaba a reaparecer. Encontrado con traza frame a frame, no a simple vista.
+- **Animaciones sin arte dedicado:** sin tiles propios para salto/caída/ataque/daño/muerte todavía; `@animate` reutiliza idle/caminar como diferenciadores visuales mínimos. Arte real pasa por el mismo pipeline de F2.2/F2.3 cuando esté listo.
+
 ## 10. Rendimiento
 
 Prioridades:

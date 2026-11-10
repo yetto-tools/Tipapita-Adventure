@@ -58,36 +58,37 @@ Acceso a CPU, PPU, APU, controladores e interrupciones.
 
 ## 4. Módulos
 
-Estructura propuesta:
+Estructura real a la fecha (F1.1). Los módulos de `hardware/`, `engine/`, `game/` y `data/` siguen siendo la organización prevista a medida que crezca el código; todavía no existen porque `src/main.s` es, deliberadamente, el único archivo fuente de este milestone.
 
 ```text
-src/
-├── main.s
-├── hardware/
-│   ├── ppu.s
-│   ├── apu.s
-│   ├── controller.s
-│   └── interrupts.s
-├── engine/
-│   ├── scene.s
-│   ├── camera.s
-│   ├── physics.s
-│   ├── collision.s
-│   ├── sprites.s
-│   └── map.s
-├── game/
-│   ├── player.s
-│   ├── enemies.s
-│   ├── items.s
-│   ├── inventory.s
-│   ├── missions.s
-│   └── progression.s
-└── data/
-    ├── levels/
-    ├── characters/
-    ├── tilesets/
-    └── dialogue/
+nes-advance/
+├── Makefile              ; build reproducible (make rom|check|run|clean)
+├── linker/
+│   └── chiquito.cfg      ; linker config de ld65 para Mapper 4 (MMC3)
+├── tools/
+│   ├── validate_rom.py   ; valida header/tamaño de la ROM generada
+│   └── test_boot.lua     ; prueba de humo automatizada en FCEUX
+├── dist/                 ; artefactos de build (.nes, .o, .map) — no versionado
+└── src/
+    ├── main.s            ; header iNES, vectores, reset/nmi/irq mínimos
+    ├── hardware/         ; (propuesto, aún no creado) ppu.s, apu.s, controller.s, interrupts.s
+    ├── engine/           ; (propuesto) scene.s, camera.s, physics.s, collision.s, sprites.s, map.s
+    ├── game/             ; (propuesto) player.s, enemies.s, items.s, inventory.s, missions.s, progression.s
+    └── data/             ; (propuesto) levels/, characters/, tilesets/, dialogue/
 ```
+
+### Layout de memoria RAM (decidido — F1.1, 2026-11-10)
+
+Convención estándar NES para las 2 KB de RAM interna:
+
+| Rango | Uso |
+|---|---|
+| `$0000-$00FF` | Zero Page (variables de acceso rápido) |
+| `$0100-$01FF` | Pila del 6502 (uso de hardware, no variables) |
+| `$0200-$02FF` | Reservado para el buffer de sombra de OAM (fuente de OAM DMA) — se implementa en F1.3 |
+| `$0300-$07FF` | RAM general (variables de juego, cola de actualización de PPU, etc.) |
+
+Esto todavía no está en uso real (el `main.s` actual no declara variables), pero queda fijado como convención para cuando F1.2/F1.3 y el motor empiecen a necesitar RAM.
 
 ## 5. Jugador
 
@@ -138,17 +139,15 @@ La progresión se divide en etapas:
 5. Tecnología avanzada.
 6. Vehículo para llegar a tierras lejanas.
 
-## 9. Mapper
+## 9. Plataforma, mapper y header (decidido — F0.2, 2026-11-10)
 
-MMC3 es una opción a evaluar por sus capacidades de bancos de memoria y soporte de IRQ.
-
-No debe considerarse una decisión definitiva hasta evaluar:
-
-- Tamaño de ROM.
-- Cantidad de niveles.
-- Organización gráfica.
-- Necesidades de scrolling.
-- Compatibilidad de emuladores y hardware.
+- **Región:** NTSC únicamente por ahora (60 Hz, CPU ~1.79 MHz, 262 scanlines/frame). PAL queda fuera de alcance hasta que se justifique explícitamente.
+- **Mapper:** MMC3 (Mapper 4). Razón principal: su IRQ de scanline permite una barra de interfaz fija mientras el resto de la pantalla hace scroll (necesidad ya descrita en la sección 6 de este documento), además de banking fino de PRG (8/16 KB) y CHR (1/2 KB).
+  - Alternativas evaluadas y descartadas: NROM (Mapper 0, sin bank switching, insuficiente para varios mundos); MMC1 (Mapper 1, banking grueso, sin IRQ de scanline).
+- **Header:** iNES 1.0 (no NES 2.0). Es suficiente para mapper 4 con los tamaños de ROM previstos. Se reevaluará NES 2.0 si se necesita declarar región explícita, submapper, o superar los límites prácticos de iNES.
+- **Tamaño inicial de ROM (para el nivel vertical de demostración, no el juego completo):** PRG-ROM 128 KB (8 bancos de 16 KB), CHR-ROM 128 KB (no CHR-RAM, por banking nativo en MMC3 sin coste de VBlank). Crecer estos tamaños más adelante no requiere cambiar de mapper (MMC3 soporta hasta 512 KB PRG / 256 KB CHR).
+- **Compatibilidad esperada (no probada todavía):** Mesen2 y FCEUX en WSL/Windows soportan mapper 4 completo, incluyendo IRQ. No se ha probado en hardware real ni se debe declarar compatibilidad real hasta hacerlo.
+- **Pendiente para Fase 1:** escribir el linker config (`.cfg`) de cc65 que coincida con estos bancos y el header iNES, y validarlo con una ROM mínima que arranque.
 
 ## 10. Rendimiento
 

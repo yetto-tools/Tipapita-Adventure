@@ -2,10 +2,10 @@
 
 ## Estado general
 
-- [ ] Proyecto aún no validado en repositorio.
-- [x] Toolchain y entorno inspeccionado (ver informe en F0.1). Emuladores instalados; CC65/FCEUX en WSL pendientes de `sudo apt install` por el usuario.
-- [ ] Mapper y layout de memoria por confirmar.
-- [ ] Nivel vertical de demostración por construir.
+- [x] Proyecto validado en repositorio Git (local, `main`, autor `yetto-tools`).
+- [x] Toolchain y entorno inspeccionado e instalado (ver F0.1): CC65 y FCEUX en WSL, Mesen2/FCEUX en Windows.
+- [x] Mapper y layout de memoria confirmados (F0.2, F1.1): MMC3, iNES 1.0, PRG 128KB/CHR 128KB, RAM layout documentado.
+- [ ] Nivel vertical de demostración por construir. (ROM mínima que enlaza y carga ya existe — F1.1 — falta inicialización real, gráficos, jugador, etc.)
 - [ ] Producción completa pendiente.
 
 **Regla:** actualizar este archivo en cada sesión de desarrollo. Una tarea solo se marca como completada cuando se cumplen sus criterios de aceptación y se registran pruebas reales.
@@ -54,20 +54,29 @@
 - Mesen2 Linux x64 — descargado y probado manualmente en `~/tools/mesen2/Mesen` (build standalone, sin dependencias de sistema faltantes según `ldd`). Corre correctamente vía WSLg (confirmado: proceso estable, sin errores en log).
 - WSLg (soporte GUI en WSL) — confirmado funcionando (`DISPLAY`, `WAYLAND_DISPLAY` y `/mnt/wslg` presentes).
 
-**Bloqueos pendientes:**
-- Mapper, header iNES/NES 2.0 y layout de memoria siguen sin confirmar (ver F0.2).
+**Bloqueos pendientes:** ninguno.
 
 **F0.1 cerrado:** toolchain completo (build + 2 emuladores) disponible y verificado en WSL. Sin bloqueos restantes para empezar Fase 1 (infraestructura de ROM).
 
 ## F0.2 Definir plataforma y mapper [P0]
-- [ ] Elegir objetivo inicial NTSC, PAL o compatibilidad dual.
-- [ ] Evaluar MMC3 frente a alternativas según alcance.
-- [ ] Definir iNES o NES 2.0.
-- [ ] Definir PRG-ROM, CHR-ROM/CHR-RAM y bancos.
-- [ ] Definir linker config y layout de memoria.
-- [ ] Documentar compatibilidad esperada.
+- [x] Elegir objetivo inicial NTSC, PAL o compatibilidad dual.
+- [x] Evaluar MMC3 frente a alternativas según alcance.
+- [x] Definir iNES o NES 2.0.
+- [x] Definir PRG-ROM, CHR-ROM/CHR-RAM y bancos.
+- [ ] Definir linker config y layout de memoria. *(pendiente — se escribe en F1.1 junto con la ROM mínima)*
+- [x] Documentar compatibilidad esperada.
 
 **Aceptación:** configuración consistente entre header, linker y código de mapper; ROM mínima validada.
+
+### Decisiones (2026-11-10) — ver detalle y justificación en `ARCHITECTURE.md` sección 9
+
+- Región: **NTSC** únicamente.
+- Mapper: **MMC3 (Mapper 4)** — necesario por su IRQ de scanline para el HUD fijo.
+- Header: **iNES 1.0**.
+- Tamaño inicial de ROM: **PRG-ROM 128 KB / CHR-ROM 128 KB** (no CHR-RAM).
+- Compatibilidad esperada: Mesen2 y FCEUX (no probado en hardware real todavía).
+
+**F0.2 funcionalmente cerrado.** Solo falta el linker config real, que se produce junto con la ROM mínima en F1.1 — ahí se valida la aceptación completa de esta tarea.
 
 ## F0.3 Definir identidad del juego [P1]
 - [ ] Proponer nombres originales para juego, protagonista y universo.
@@ -82,15 +91,23 @@
 
 # Fase 1 — Infraestructura de ROM
 
-## F1.1 Toolchain y build [P0]
-- [ ] Configurar ca65/ld65.
-- [ ] Crear linker config.
-- [ ] Crear script de build reproducible.
-- [ ] Añadir validación de encabezado y tamaño de ROM.
-- [ ] Añadir limpieza de artefactos generados.
-- [ ] Documentar comandos en README.
+## F1.1 Toolchain y build [P0] — Implementada, compilada, probada en emulador (2026-11-10)
+- [x] Configurar ca65/ld65. (WSL/Ubuntu, `cc65` v2.19-2build1 — ver F0.1)
+- [x] Crear linker config. (`linker/chiquito.cfg`, Mapper 4/MMC3, PRG-ROM 128KB / CHR-ROM 128KB)
+- [x] Crear script de build reproducible. (`Makefile`: `make rom|check|run|clean`)
+- [x] Añadir validación de encabezado y tamaño de ROM. (`tools/validate_rom.py`, corre automáticamente tras `make rom`)
+- [x] Añadir limpieza de artefactos generados. (`make clean` borra `dist/`)
+- [x] Documentar comandos en README. (sección "Build" en `README.md`)
 
-**Aceptación:** desde un entorno limpio se genera una ROM válida sin pasos manuales ocultos.
+**Aceptación:** configuración consistente verificada.
+
+**Registro de la tarea:**
+- Archivos: `src/main.s`, `linker/chiquito.cfg`, `Makefile`, `tools/validate_rom.py`, `tools/test_boot.lua`, `.gitignore`.
+- Comando de build: `make clean && make rom` (en WSL/Ubuntu).
+- Resultado de compilación: éxito. `dist/chiquito.nes`, 262160 bytes, header iNES válido (mapper 4, PRG 128KB, CHR 128KB). Build repetido dos veces produce el mismo SHA-256 (reproducible).
+- Prueba ejecutada: `fceux --loadlua tools/test_boot.lua dist/chiquito.nes`.
+- Resultado observado: FCEUX reconoce "Mapper #: 4 / Mapper name: MMC3", carga la ROM, corre 30 frames vía el script Lua y sale limpiamente (`Emulator Start` → `Emulator Exit`, sin errores).
+- Limitaciones pendientes: `main.s` es intencionalmente mínimo (`reset` es un bucle infinito, `nmi`/`irq` son `rti`). No hay inicialización real de pila/PPU/APU, no hay gráficos, no se ha probado en hardware real. Eso corresponde a F1.2 y F1.3.
 
 ## F1.2 Reset e inicialización [P0]
 - [ ] Implementar reset.

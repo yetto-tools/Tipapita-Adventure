@@ -314,14 +314,32 @@
 - Limitaciones pendientes: el formato de mapa sigue siendo "una pantalla = un nametable completo", sin soporte para mapas más grandes ni carga progresiva (F4.2/F4.3). Solo hay un mapa de prueba real (`pradera.txt`); el mapa alterno de la prueba es sintético, generado en memoria, no un asset del juego. No probado en hardware real.
 
 ## F4.2 Scrolling [P1]
-- [ ] Implementar coordenadas de mundo.
-- [ ] Implementar coordenadas de pantalla.
-- [ ] Implementar cámara horizontal.
-- [ ] Implementar límites de cámara.
-- [ ] Actualizar nametables por sectores.
-- [ ] Probar límites y wrap de scroll.
+- [x] Implementar coordenadas de mundo.
+- [x] Implementar coordenadas de pantalla.
+- [x] Implementar cámara horizontal.
+- [x] Implementar límites de cámara.
+- [x] Actualizar nametables por sectores.
+- [x] Probar límites y wrap de scroll.
 
 **Aceptación:** desplazamiento continuo sin corrupción gráfica.
+
+**Registro de la tarea:**
+- Archivos: `assets/maps/pradera.txt` (ampliado de 1 a 3 pantallas, 48x15 metatiles = 768x240px), `tools/map2scene.py` (reescrito para multi-pantalla: `compile_screen`/`compile_collision` separados, tabla de punteros `scene_pradera_screen_ptrs`, pantallas `scene_pradera_screen0/1/2` de 1024 bytes cada una, tabla de offsets por fila `scene_pradera_row_offset_lo/hi`, mapa de colisión del nivel completo `scene_pradera_collision` de 720 bytes), `tools/test_map2scene.py` (reescrito para el nuevo formato, 28 verificaciones), `src/main.s` (cambios de fondo, ver abajo), `tools/test_nmi.lua` y `tools/test_scrolling.lua` (nuevo) ajustados/creados para el nuevo layout de ZEROPAGE y el comportamiento real de scroll.
+- Cambios de fondo en `src/main.s`:
+  - Mirroring vertical real: bit del header iNES (`$41`) + registro propio de MMC3 en `$A000` (programado en `reset`) — necesario para que `$2000`/`$2400` sean VRAM física distinta y el scroll horizontal revele contenido nuevo en vez de repetir la misma pantalla.
+  - Posición X de Chiquito pasa a ser de mundo y de 16 bits (`player_x_frac`/`player_x_px_lo`/`player_x_px_hi`, hasta `LEVEL_WIDTH_PX`=768), con suma de velocidad extendida de signo al tercer byte (`@apply_x`). Y sigue en 8 bits (sin scroll vertical).
+  - `get_tile_collision` reescrito: ya no puede usar el truco de enmascarar bits (fila*16) de F3.3 porque `LEVEL_COLS`=48 no es potencia de 2 — usa la tabla de offsets por fila más un puntero indirecto de 16 bits hacia `scene_pradera_collision`. Nuevo helper `set_col_x` para armar el offset de 16 bits en cada esquina del hitbox consultada.
+  - `update_camera_and_streaming` (nuevo proc, llamado desde el main loop tras `update_player`): recalcula `camera_x` entera cada frame (`clamp(player_x - 120, 0, 512)`, sin suavizado) y gestiona streaming de pantallas hacia el nametable físico que quedó fuera de vista, repartido en `STREAM_BUDGET`=16 bytes/frame vía `ppu_queue_push` (la cola de F1.3, sin uso real hasta ahora). Regla de asignación de slot fija: `pantalla AND 1` (pantalla par -> `$2000`, impar -> `$2400`).
+  - `nmi` escribe PPUSCROLL (`camera_x_lo`) y el bit de nametable de PPUCTRL (`camera_x_hi AND 1`) cada frame, después de `ppu_queue_flush` (orden obligatorio: `$2005`/`$2006` comparten el mismo latch interno).
+  - `reset` ahora carga 2 pantallas lógicas (0 y 1) a los 2 nametables físicos en vez de 1 pantalla a 1 nametable.
+  - `@animate` escribe la X de OAM como `player_x_px_lo - camera_x_lo` (relativa a pantalla, no de mundo).
+- **Bug real encontrado y corregido** (no estaba relacionado con el diseño de scroll en sí, pero se volvió visible al agregar variables persistentes nuevas): en `reset`, el bucle `@clearmem` asumía que X llegaba en 0 desde el bucle anterior de inicialización de MMC3 (`txa ; a = 0`), pero ese bucle deja X en 8 (corre de 0 a 8 exactamente). Esto hacía que `@clearmem` escribiera el valor 8 (no 0) en los offsets 8-255 de cada página de RAM, y nunca tocara los offsets 0-7. Era un bug **latente desde F1.3**, invisible hasta ahora porque toda variable afectada en offset>=8 o bien se reinicializaba explícitamente después (posición/velocidad del jugador) o se recalculaba cada frame desde cero (`pad1`). Las variables nuevas de cámara/streaming (offset 0x23-0x30) nunca se reinicializan explícitamente y cayeron todas en el rango roto, arrancando en 8 en vez de 0. Encontrado con `test_scrolling.lua` (streaming arrancaba con `stream_screen=8`, `stream_slot=8`, valores sin sentido) y confirmado leyendo bytes de RAM frame por frame en FCEUX. Corregido reemplazando `txa` por `lda #$00` + `ldx #$00` explícitos antes del bucle — ya no depende del valor que deje el código anterior.
+- Comando de build: `make rom`.
+- Resultado de compilación: éxito (`ca65`/`ld65`/`validate_rom.py` sin errores, ROM 262160 bytes, mapper 4, PRG 128KB, CHR 128KB).
+- Pruebas ejecutadas: las 9 pruebas de FCEUX existentes (`test_boot`, `test_init`, `test_nmi`, `test_palette`, `test_tiles`, `test_sprites`, `test_controller`, `test_movement`, `test_collision`, `test_state_machine`) + la nueva `tools/test_scrolling.lua` + `tools/test_map2scene.py`.
+- Resultados observados: `RESULT=PASS` en las 10 pruebas de FCEUX y en `test_map2scene.py` (28/28 verificaciones). `test_scrolling.lua` verifica, contra el mapa real de 3 pantallas: la cámara arranca en 0 y sigue a Chiquito caminando de verdad dentro de la pantalla 0 con la fórmula exacta; moverse dentro de las pantallas 0/1 (precargadas al arrancar) NO dispara streaming; teletransportarse bien adentro de la pantalla 2 SÍ dispara streaming real hacia el nametable que le toca (confirmado leyendo un byte de VRAM real con `ppu.readbyte`, no solo la bandera `nt_slot_screens`, completado en 66 frames, ~1024/16 esperado); y la colisión contra el peligro de la columna 40 (`col_x_hi=2`, más allá de los primeros 256px de mundo) sigue funcionando — ejercita el camino de 16 bits de `get_tile_collision` que F3.3 nunca probó.
+- Bugs encontrados y corregidos durante la tarea (además del de `@clearmem` arriba): `map2scene.py` generaba `.addr X, .addr Y, .addr Z` (sintaxis ca65 inválida, directiva repetida) en vez de `.addr X, Y, Z` al emitir la tabla de punteros de pantalla; `tools/test_nmi.lua` asumía que `reset` terminaba en 5 frames reales (válido antes de F4.2) — ahora tarda ~7 frames porque copia 2 pantallas de nametable en vez de 1, así que el test se cambió para esperar la señal real (`frame_count > 0`) en vez de un número fijo de frames; `tools/test_sprites.lua` sampleaba el framebuffer con la X de mundo del jugador en vez de la X de pantalla (world X - camera_x) tras caminar — funcionaba antes de F4.2 porque mundo y pantalla coincidían siempre (cámara fija en 0 sin esta tarea).
+- Limitaciones pendientes: solo hay scroll horizontal (no vertical — no hace falta todavía, el nivel de prueba no lo requiere). El streaming nunca transmite más de 1 pantalla a la vez (suficiente para este nivel de 3 pantallas, pero una ráfaga de velocidad muy alta combinada con un nivel con MUCHAS pantallas podría, en teoría, necesitar adelantarse más de 1 pantalla por delante de la cámara — no ejercitado, `MOVE_MAX_SPEED` actual tarda ~170 frames en cruzar una pantalla completa, de sobra frente a los 64 frames que tarda transmitir una). No probado en hardware real.
 
 ## F4.3 Pantallas y habitaciones [P1]
 - [ ] Definir formato de habitación.

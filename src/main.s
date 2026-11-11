@@ -67,6 +67,30 @@
 ; (congelado) y, al expirar, `respawn_player` reaparece a Chiquito en
 ; (SPAWN_X,SPAWN_Y). ATTACK (botón B) "enraíza" el movimiento horizontal
 ; -- todavía no hay arma/hitbox de ataque real (eso es F5.3).
+;
+; F4.2 (scrolling horizontal): el nivel ahora puede ser más ancho que
+; una pantalla (`assets/maps/pradera.txt` tiene 3 = `LEVEL_SCREENS`,
+; `LEVEL_COLS` metatiles de ancho). Esto cambia varias cosas de raíz:
+;   - La posición X de Chiquito pasa a ser de MUNDO, no de pantalla:
+;     `player_x_frac` (fracción, 8.8) + `player_x_px_lo`/`player_x_px_hi`
+;     (píxel entero, 16 bits -- un solo byte ya no alcanza para 768px).
+;     La suma de velocidad ahora propaga el signo de `player_vx_hi` al
+;     byte alto nuevo (ver `@apply_x`).
+;   - La colisión (`get_tile_collision`) ya no puede usar el truco de
+;     enmascarar el nibble alto de Y para obtener fila*16 -- con
+;     `LEVEL_COLS` no potencia de 2, usa una tabla de offsets por fila
+;     (`scene_pradera_row_offset_*`) y un puntero indirecto de 16 bits.
+;   - Mirroring vertical (registro de MMC3 en $A000, no el bit del
+;     header iNES, que MMC3 ignora en tiempo de ejecución): necesario
+;     para que $2000/$2400 sean físicamente distintos y el scroll
+;     horizontal revele contenido nuevo en vez de repetir la pantalla.
+;   - `update_camera_and_streaming` (llamada desde el main loop después
+;     de `update_player`) calcula `camera_x` (sigue a Chiquito con un
+;     offset fijo, con límites en los bordes del nivel), escribe
+;     PPUSCROLL/el bit de selección de nametable en `nmi`, y transmite
+;     ("streaming") la pantalla que haga falta hacia el nametable físico
+;     que ya quedó fuera de vista, usando `ppu_queue_push` repartido en
+;     varios frames (la cola de F1.3, sin uso real hasta ahora).
 
 .include "data/palettes.s"
 .include "../dist/tiles_pradera.s"
@@ -134,6 +158,28 @@ KNOCKBACK_VY     = $FC00   ; -4.0 px/frame, empuje vertical (mismo valor que JUM
 ; "muerte por caída" sin necesitar un sistema de vida real todavía.
 DEATH_Y_THRESHOLD = 224
 
+; F4.2 (cámara/scroll). LEVEL_COLS/LEVEL_SCREENS vienen de
+; dist/scene_pradera.s (generados por tools/map2scene.py a partir de
+; assets/maps/pradera.txt). CAMERA_OFFSET centra a Chiquito a 120px del
+; borde izquierdo de la pantalla visible (256px de ancho); camera_x se
+; recalcula entero cada frame (sin suavizado) y se recorta a
+; [0, MAX_CAMERA_X] para no mostrar nada fuera del nivel.
+CAMERA_OFFSET   = 120
+LEVEL_WIDTH_PX  = LEVEL_COLS * 16
+MAX_CAMERA_X    = LEVEL_WIDTH_PX - 256
+
+; Presupuesto de bytes transmitidos por frame hacia el nametable físico
+; que está fuera de vista (streaming de pantallas, ver
+; update_camera_and_streaming). 16 bytes/frame tarda 1024/16=64 frames
+; (~1.07s) en completar una pantalla -- de sobra: a MOVE_MAX_SPEED
+; (1.5px/frame) cruzar una pantalla completa (256px) tarda ~170 frames.
+STREAM_BUDGET = 16
+
+; PPUCTRL fijo (bit7 NMI, bit3 sprites en pattern table 1) que se
+; combina cada frame con el bit de selección de nametable (bit0 =
+; camera_x_hi AND 1) en nmi -- ver nota F4.2 arriba del archivo.
+PPUCTRL_BASE = %10001000
+
 ; Bits del byte normalizado de mando (orden estándar de NES: el primer
 ; botón leído -- A -- termina en el bit más alto, por cómo se arma el
 ; byte con ROL en read_controller1).
@@ -189,8 +235,13 @@ pad1_prev:    .res 1   ; botones sostenidos en el frame anterior
 pad1_pressed: .res 1   ; botones que pasaron de 0 a 1 este frame (flanco de bajada a presionado)
 
 ; Posición y velocidad de Chiquito, en punto fijo 8.8 (ver nota F3.2).
-player_x_lo: .res 1
-player_x_hi: .res 1
+; F4.2: la X pasa a ser de MUNDO (hasta LEVEL_WIDTH_PX, no solo 256px de
+; una pantalla), por eso el píxel entero de X ahora son 2 bytes
+; (player_x_px_lo/hi) en vez de 1. La Y sigue en 1 byte: el nivel no
+; scrollea verticalmente todavía, 15 filas*16px=240px entra en un byte.
+player_x_frac:  .res 1   ; fracción de X (antes player_x_lo)
+player_x_px_lo: .res 1   ; píxel entero de X, byte bajo (antes player_x_hi)
+player_x_px_hi: .res 1   ; píxel entero de X, byte alto (nuevo en F4.2)
 player_y_lo: .res 1
 player_y_hi: .res 1
 player_vx_lo: .res 1
@@ -208,11 +259,41 @@ cmp_a_hi: .res 1
 cmp_b_lo: .res 1
 cmp_b_hi: .res 1
 
-; Argumentos/escratch de get_tile_collision (F3.3): no deben usarse para
-; nada más mientras se está resolviendo una consulta de colisión.
-col_x:   .res 1
-col_y:   .res 1
-col_tmp: .res 1
+; Argumentos/escratch de get_tile_collision (F3.3/F4.2): no deben usarse
+; para nada más mientras se está resolviendo una consulta de colisión.
+; col_x pasa a 16 bits (mundo, hasta LEVEL_WIDTH_PX); col_y sigue en 1
+; byte (sin scroll vertical). col_ptr_lo/hi es el puntero indirecto
+; hacia scene_pradera_collision que arma get_tile_collision.
+col_x_lo: .res 1
+col_x_hi: .res 1
+col_y:    .res 1
+col_tmp:  .res 1
+col_ptr_lo: .res 1
+col_ptr_hi: .res 1
+
+; Cámara horizontal (F4.2): posición en MUNDO del borde izquierdo de la
+; pantalla visible. Se recalcula entera cada frame en
+; update_camera_and_streaming (sin suavizado); nmi la usa para
+; PPUSCROLL y el bit de nametable de PPUCTRL.
+camera_x_lo: .res 1
+camera_x_hi: .res 1
+cam_scratch: .res 1   ; escratch de update_camera_and_streaming, no usar en otro lado
+
+; Streaming de pantallas (F4.2): qué pantalla lógica vive en cada
+; nametable físico ahora mismo (índice 0 = $2000, 1 = $2400; ver
+; update_camera_and_streaming para la regla de asignación fija
+; pantalla&1 = slot), y el estado de una transmisión en curso repartida
+; en varios frames vía ppu_queue_push.
+nt_slot_screens: .res 2
+stream_active:   .res 1
+stream_screen:   .res 1
+stream_slot:     .res 1
+stream_src_lo:   .res 1
+stream_src_hi:   .res 1
+stream_dst_lo:   .res 1
+stream_dst_hi:   .res 1
+stream_remaining_lo: .res 1
+stream_remaining_hi: .res 1
 
 .segment "BSS"
 ppu_queue_len:       .res 1
@@ -229,13 +310,13 @@ oam_buffer: .res 256  ; página $0200-$02FF, fuente de la OAM DMA ($4014)
     .byte 8                 ; PRG-ROM: 8 bancos de 16 KB = 128 KB (ver ARCHITECTURE.md §9)
     .byte 16                ; CHR-ROM: 16 bancos de 8 KB = 128 KB
     ; Flags 6: nibble bajo del mapper (4 = MMC3) en bits 4-7, bit 0 = mirroring.
-    ; El bit de mirroring aquí es PROVISIONAL: este milestone no toca
-    ; nametables, así que no tiene efecto todavía. Además, en MMC3 el
-    ; registro de mirroring del propio mapper ($A000) manda en tiempo de
-    ; ejecución una vez que el código lo programe. No tratar este bit como
-    ; decisión final; confirmar con la documentación de NESdev al
-    ; implementar scrolling (Fase 4).
-    .byte $40
+    ; F4.2: bit0=1 = mirroring vertical (en términos de iNES), que es lo
+    ; que necesita el scroll horizontal para que $2000/$2400 sean VRAM
+    ; física distinta (ver nota F4.2 arriba del archivo). En MMC3 este
+    ; bit del header es solo el estado inicial -- el registro propio del
+    ; mapper en $A000 manda en tiempo de ejecución una vez que `reset` lo
+    ; programa (con el mismo valor, $00 = vertical, por consistencia).
+    .byte $41
     .byte $00               ; Flags 7: nibble alto del mapper = 0, iNES 1.0 (no NES 2.0)
     .byte $00               ; PRG-RAM: no se usa todavía
     .byte $00               ; TV system: 0 = NTSC (ver decisión F0.2)
@@ -280,6 +361,14 @@ oam_buffer: .res 256  ; página $0200-$02FF, fuente de la OAM DMA ($4014)
     cpx #$08
     bne @mmc3_init
 
+    ; F4.2: mirroring vertical vía el registro propio de MMC3 ($A000,
+    ; bit0: 0=vertical, 1=horizontal -- confirmar en NESdev, la
+    ; nomenclatura es confusa). Vertical es lo que separa $2000/$2400 en
+    ; VRAM física distinta, necesario para que el scroll horizontal
+    ; revele contenido nuevo en vez de repetir la misma pantalla.
+    lda #$00
+    sta $A000
+
     ; Primer VBlank: garantiza que la PPU ya terminó su encendido antes de
     ; tocarla (secuencia estándar de arranque de NES).
 @vblankwait1:
@@ -288,7 +377,21 @@ oam_buffer: .res 256  ; página $0200-$02FF, fuente de la OAM DMA ($4014)
 
     ; Limpia las 2 KB de RAM interna ($0000-$07FF) a cero, incluyendo el
     ; buffer de sombra de OAM ($0200-$02FF) y la cola de PPU.
-    txa                     ; a = 0
+    ;
+    ; F4.2: bug real encontrado al probar scrolling (ver TASKS.md) --
+    ; X sale del loop @mmc3_init en 8, no en 0 (el loop corre X de 0 a
+    ; 8 exactamente). Antes de este fix, "txa" ponía A=8 (no 0) y el
+    ; bucle de abajo arrancaba en X=8, así que escribía 8 (no 0) en los
+    ; offsets 8-255 de cada página y NUNCA tocaba los offsets 0-7 --
+    ; latente desde F1.3 porque toda variable en offset<8 o reinicializada
+    ; explícitamente después (posición/velocidad del jugador, OAM, pad1
+    ; recalculado cada frame) enmascaraba el error. Las variables nuevas
+    ; de cámara/streaming de F4.2 cayeron en offset>=8 y nunca se
+    ; reinicializan explícitamente, así que el bug se volvió visible.
+    ; Fix: forzar A y X a 0 explícitamente, sin depender del valor que
+    ; haya quedado en X.
+    lda #$00
+    ldx #$00
 @clearmem:
     sta $0000,x
     sta $0100,x
@@ -325,9 +428,12 @@ oam_buffer: .res 256  ; página $0200-$02FF, fuente de la OAM DMA ($4014)
     ; F3.2/F3.3: posición/estado inicial de Chiquito, en punto fijo 8.8.
     ; Coincide con la posición estática que se acaba de copiar al OAM
     ; (SPAWN_Y/SPAWN_X, el punto de reaparición definido en la escena),
-    ; para que el primer frame no "salte".
-    lda #SPAWN_X
-    sta player_x_hi
+    ; para que el primer frame no "salte". F4.2: SPAWN_X es de mundo
+    ; (hasta LEVEL_WIDTH_PX), por eso se parte en low/high.
+    lda #<SPAWN_X
+    sta player_x_px_lo
+    lda #>SPAWN_X
+    sta player_x_px_hi
     lda #SPAWN_Y
     sta player_y_hi
     lda #1
@@ -339,7 +445,7 @@ oam_buffer: .res 256  ; página $0200-$02FF, fuente de la OAM DMA ($4014)
     ; depender de esa limpieza si el código de más arriba cambia alguna
     ; vez de orden.
     lda #0
-    sta player_x_lo
+    sta player_x_frac
     sta player_y_lo
     sta player_vx_lo
     sta player_vx_hi
@@ -370,40 +476,50 @@ oam_buffer: .res 256  ; página $0200-$02FF, fuente de la OAM DMA ($4014)
     cpx #32
     bne @copypalette
 
-    ; Copia los 960 bytes de tiles de la escena de pradera a los tiles
-    ; del nametable 0 ($2000-$23BF).
+    ; F4.2: carga las 2 primeras pantallas lógicas (0 y 1) a los 2
+    ; nametables físicos ($2000 y $2400 -- el mirroring vertical del
+    ; MMC3 programado arriba los separa en VRAM física distinta). Cada
+    ; pantalla compilada por tools/map2scene.py ya son 1024 bytes
+    ; contiguos (960 de tiles + 64 de atributos) en el layout EXACTO de
+    ; un nametable de VRAM, así que una sola copia alcanza por pantalla
+    ; -- ya no hace falta separar tiles/atributos como antes de F4.2.
+    ; nt_slot_screens[slot] = qué pantalla lógica vive en ese nametable
+    ; ahora mismo; aquí coincide 1:1 con la regla fija pantalla&1=slot
+    ; que usa update_camera_and_streaming más abajo.
     bit $2002
     lda #$20
     sta $2006
     lda #$00
     sta $2006
-    lda #<scene_pradera_tiles
+    lda #<scene_pradera_screen0
     sta pbulk_src
-    lda #>scene_pradera_tiles
+    lda #>scene_pradera_screen0
     sta pbulk_src+1
-    lda #<960
+    lda #<1024
     sta pbulk_len
-    lda #>960
+    lda #>1024
     sta pbulk_len+1
     jsr ppu_copy_bulk
 
-    ; Copia los 64 bytes de atributos de la escena a la tabla de
-    ; atributos del nametable 0 ($23C0-$23FF), para que cada metatile
-    ; muestre la subpaleta de fondo que le corresponde.
     bit $2002
-    lda #$23
+    lda #$24
     sta $2006
-    lda #$C0
+    lda #$00
     sta $2006
-    lda #<scene_pradera_attrs
+    lda #<scene_pradera_screen1
     sta pbulk_src
-    lda #>scene_pradera_attrs
+    lda #>scene_pradera_screen1
     sta pbulk_src+1
-    lda #<64
+    lda #<1024
     sta pbulk_len
-    lda #>64
+    lda #>1024
     sta pbulk_len+1
     jsr ppu_copy_bulk
+
+    lda #0
+    sta nt_slot_screens+0
+    lda #1
+    sta nt_slot_screens+1
 
     ; Reinicia el latch de scroll/dirección para dejar la PPU en un estado
     ; conocido.
@@ -414,8 +530,10 @@ oam_buffer: .res 256  ; página $0200-$02FF, fuente de la OAM DMA ($4014)
 
     ; Habilita generación de NMI, patrón de sprites en pattern table 1
     ; (bit3) y renderizado de fondo + sprites (F2.3: ya hay sprites
-    ; reales en el OAM).
-    lda #%10001000           ; PPUCTRL: bit7 NMI, bit3 sprites usan pattern table 1
+    ; reales en el OAM). camera_x_hi es 0 aquí (todavía no corrió ni un
+    ; frame), así que el bit de nametable coincide con PPUCTRL_BASE sin
+    ; ajuste -- nmi toma el control de este registro desde el próximo NMI.
+    lda #PPUCTRL_BASE
     sta $2000
     lda #%00011110           ; PPUMASK: fondo+sprites, incluyendo los 8px izquierdos
     sta $2001
@@ -428,6 +546,7 @@ mainloop:
 
     jsr read_controller1     ; F3.1: actualiza pad1/pad1_prev/pad1_pressed
     jsr update_player        ; F3.2: física + escribe posición/tile/flip al OAM
+    jsr update_camera_and_streaming ; F4.2: cámara + streaming de pantallas
 
     jmp mainloop
 .endproc
@@ -447,6 +566,22 @@ mainloop:
 
     ; 2) Vacía la cola de actualizaciones de PPU, si hay algo pendiente.
     jsr ppu_queue_flush
+
+    ; F4.2: escribe PPUSCROLL y el bit de nametable de PPUCTRL cada
+    ; frame. Tiene que ir DESPUÉS de ppu_queue_flush: $2005 y $2006
+    ; comparten el mismo latch interno de "primer/segundo byte", y cada
+    ; entrada de la cola escribe $2006 dos veces (par) -- el latch
+    ; siempre vuelve al mismo estado con el que entró a este NMI, así
+    ; que es seguro escribir $2005 (X, luego Y) justo después, sin
+    ; necesidad de leer $2002 para resetear el latch.
+    lda camera_x_hi
+    and #1
+    ora #PPUCTRL_BASE
+    sta $2000
+    lda camera_x_lo
+    sta $2005
+    lda #$00
+    sta $2005               ; Y scroll = 0: todavía no hay scroll vertical
 
     ; 3) Marca el frame como listo y avanza el contador.
     inc frame_count
@@ -513,23 +648,78 @@ mainloop:
 .endproc
 
 ; Devuelve en A el tipo de colisión (COLLISION_*) del metatile que
-; contiene el punto de píxel (col_x, col_y). Metatiles de 16x16px en una
-; grilla de 16 columnas; índice = fila*16 + columna. Como fila*16 es
-; exactamente "quedarse con el nibble alto de col_y" (enmascarar con
-; $F0), no hace falta desplazar col_y y luego multiplicar por separado.
+; contiene el punto de píxel de MUNDO (col_x_hi:col_x_lo, col_y).
+; Metatiles de 16x16px; índice = fila*LEVEL_COLS + columna.
+;
+; F4.2: a diferencia de F3.3 (una sola pantalla de 16 columnas, donde
+; fila*16 era literalmente "el nibble alto de col_y"), LEVEL_COLS=48 no
+; es potencia de 2 -- no hay truco de enmascarar bits para la fila. En
+; vez de multiplicar en tiempo de ejecución, se usa una tabla
+; precalculada (scene_pradera_row_offset_lo/hi, generada por
+; tools/map2scene.py) y un puntero indirecto de 16 bits hacia
+; scene_pradera_collision (ver nota de archivo sobre "Indirect-indexed
+; addressing" para tablas >256 bytes -- el mapa de colisión completo ya
+; pesa 720 bytes).
 .proc get_tile_collision
+    ; fila = col_y >> 4 (0-14; cabe en 1 byte, no hay scroll vertical).
     lda col_y
-    and #$F0                 ; = fila * 16
-    sta col_tmp
-    lda col_x
     lsr a
     lsr a
     lsr a
-    lsr a                    ; = columna (0-15)
-    clc
-    adc col_tmp
+    lsr a
     tax
-    lda scene_pradera_collision,x
+
+    ; col_ptr = &scene_pradera_collision + row_offset[fila]
+    lda scene_pradera_row_offset_lo,x
+    clc
+    adc #<scene_pradera_collision
+    sta col_ptr_lo
+    lda scene_pradera_row_offset_hi,x
+    adc #>scene_pradera_collision
+    sta col_ptr_hi
+
+    ; columna = col_x (16 bits) >> 4 (0-47; tras desplazar 4 veces el
+    ; valor de 16 bits, el byte alto queda en 0 porque LEVEL_WIDTH_PX
+    ; < 4096 -- el resultado cabe entero en el byte bajo). Técnica
+    ; estándar: LSR del byte alto seguido de ROR del bajo, 4 veces,
+    ; propaga el acarreo entre ambos bytes como una sola división.
+    lda col_x_hi
+    sta col_tmp
+    lda col_x_lo
+    lsr col_tmp
+    ror a
+    lsr col_tmp
+    ror a
+    lsr col_tmp
+    ror a
+    lsr col_tmp
+    ror a
+
+    ; col_ptr += columna (suma de 8 bits sobre el puntero de 16 bits)
+    clc
+    adc col_ptr_lo
+    sta col_ptr_lo
+    bcc @no_carry
+    inc col_ptr_hi
+@no_carry:
+
+    ldy #$00
+    lda (col_ptr_lo),y
+    rts
+.endproc
+
+; Prepara una consulta de colisión para una esquina del hitbox del
+; jugador: col_x (16 bits) = player_x_px (16 bits, de mundo) + A, donde
+; A es un offset chico (0, PLAYER_HITBOX_W o PLAYER_HITBOX_W-1 en todo
+; este archivo). No toca col_y -- el llamador lo fija por separado
+; (offset_y, de 1 byte, sin scroll vertical).
+.proc set_col_x
+    clc
+    adc player_x_px_lo
+    sta col_x_lo
+    lda player_x_px_hi
+    adc #0
+    sta col_x_hi
     rts
 .endproc
 
@@ -700,13 +890,26 @@ mainloop:
     sta player_vx_hi
 
 @apply_x:
+    ; F4.2: posición de mundo de 16 bits (frac + px_lo + px_hi). vx sigue
+    ; siendo 16 bits con signo (frac + entero con signo); su byte alto
+    ; se extiende de signo ($00 o $FF) hacia el tercer byte de la suma
+    ; -- ver nota F4.2 arriba del archivo.
     clc
-    lda player_x_lo
+    lda player_x_frac
     adc player_vx_lo
-    sta player_x_lo
-    lda player_x_hi
+    sta player_x_frac
+    lda player_x_px_lo
     adc player_vx_hi
-    sta player_x_hi
+    sta player_x_px_lo
+    lda player_vx_hi
+    bmi @apply_x_ext_neg
+    lda #$00
+    jmp @apply_x_ext
+@apply_x_ext_neg:
+    lda #$FF
+@apply_x_ext:
+    adc player_x_px_hi       ; usa el acarreo de la suma anterior (carry preservado por bmi/jmp)
+    sta player_x_px_hi
 
     ; --- Colisión horizontal (F3.3): solo sólido bloquea; plataformas y
     ; peligros no detienen el movimiento lateral. ---
@@ -717,10 +920,8 @@ mainloop:
     bmi @hcol_left
 
 @hcol_right:
-    lda player_x_hi
-    clc
-    adc #PLAYER_HITBOX_W
-    sta col_x
+    lda #PLAYER_HITBOX_W
+    jsr set_col_x
     lda player_y_hi
     sta col_y
     jsr get_tile_collision
@@ -734,19 +935,25 @@ mainloop:
     cmp #COLLISION_SOLID
     bne @hcol_done
 @hcol_right_hit:
-    lda col_x
-    and #$F0                 ; borde izquierdo del tile golpeado
+    ; borde izquierdo del tile golpeado (de mundo, 16 bits) menos el
+    ; ancho del hitbox -- floor-a-16 de un valor de 16 bits es igual a
+    ; enmascarar solo el byte bajo, porque 16 divide exacto a 256.
+    lda col_x_lo
+    and #$F0
     sec
     sbc #PLAYER_HITBOX_W
-    sta player_x_hi
+    sta player_x_px_lo
+    lda col_x_hi
+    sbc #0
+    sta player_x_px_hi
     lda #0
     sta player_vx_lo
     sta player_vx_hi
     jmp @hcol_done
 
 @hcol_left:
-    lda player_x_hi
-    sta col_x
+    lda #0
+    jsr set_col_x
     lda player_y_hi
     sta col_y
     jsr get_tile_collision
@@ -760,11 +967,15 @@ mainloop:
     cmp #COLLISION_SOLID
     bne @hcol_done
 @hcol_left_hit:
-    lda col_x
+    ; borde derecho del tile golpeado (de mundo, 16 bits).
+    lda col_x_lo
     and #$F0
     clc
-    adc #16                  ; borde derecho del tile golpeado
-    sta player_x_hi
+    adc #16
+    sta player_x_px_lo
+    lda col_x_hi
+    adc #0
+    sta player_x_px_hi
     lda #0
     sta player_vx_lo
     sta player_vx_hi
@@ -848,8 +1059,8 @@ mainloop:
     ; Cayendo (vy>=0): sólido o plataforma bloquean por abajo. Las
     ; plataformas son de un solo sentido -- solo cuentan aquí porque ya
     ; se sabe que se está cayendo, no subiendo.
-    lda player_x_hi
-    sta col_x
+    lda #0
+    jsr set_col_x
     lda player_y_hi
     clc
     adc #PLAYER_HITBOX_H
@@ -859,10 +1070,8 @@ mainloop:
     beq @vcol_floor_hit
     cmp #COLLISION_PLATFORM
     beq @vcol_floor_hit
-    lda player_x_hi
-    clc
-    adc #(PLAYER_HITBOX_W-1)
-    sta col_x
+    lda #(PLAYER_HITBOX_W-1)
+    jsr set_col_x
     jsr get_tile_collision   ; col_y sigue siendo el borde inferior
     cmp #COLLISION_SOLID
     beq @vcol_floor_hit
@@ -890,17 +1099,15 @@ mainloop:
 @vcol_ceiling:
     ; Subiendo (vy<0): solo sólido bloquea por arriba (las plataformas no
     ; detienen desde abajo -- se puede saltar a través de ellas).
-    lda player_x_hi
-    sta col_x
+    lda #0
+    jsr set_col_x
     lda player_y_hi
     sta col_y
     jsr get_tile_collision
     cmp #COLLISION_SOLID
     beq @vcol_ceiling_hit
-    lda player_x_hi
-    clc
-    adc #(PLAYER_HITBOX_W-1)
-    sta col_x
+    lda #(PLAYER_HITBOX_W-1)
+    jsr set_col_x
     jsr get_tile_collision   ; col_y sigue siendo el borde superior
     cmp #COLLISION_SOLID
     bne @vcol_done
@@ -926,18 +1133,16 @@ mainloop:
     cmp #STATE_DEAD
     beq @hazard_skip
 
-    lda player_x_hi
-    sta col_x
+    lda #0
+    jsr set_col_x
     lda player_y_hi
     sta col_y
     jsr get_tile_collision
     cmp #COLLISION_HAZARD
     beq @hazard_hit
 
-    lda player_x_hi
-    clc
-    adc #(PLAYER_HITBOX_W-1)
-    sta col_x
+    lda #(PLAYER_HITBOX_W-1)
+    jsr set_col_x
     jsr get_tile_collision   ; col_y sigue siendo el borde superior
     cmp #COLLISION_HAZARD
     beq @hazard_hit
@@ -950,8 +1155,8 @@ mainloop:
     cmp #COLLISION_HAZARD
     beq @hazard_hit
 
-    lda player_x_hi
-    sta col_x
+    lda #0
+    jsr set_col_x
     jsr get_tile_collision   ; col_y sigue siendo el borde inferior
     cmp #COLLISION_HAZARD
     bne @hazard_skip
@@ -1052,10 +1257,16 @@ mainloop:
 @set_attr:
     sta oam_buffer+2
 
-    ; Posición real -> OAM (byte alto de cada coordenada en punto fijo).
+    ; Posición real -> OAM. Y no cambia (sin scroll vertical). X es de
+    ; MUNDO (F4.2); el OAM necesita X de PANTALLA, así que se resta la
+    ; cámara -- una resta de 8 bits alcanza porque ambos valores están
+    ; dentro de la misma pantalla visible de 256px (si camera_x está bien
+    ; recortado, player_x_px_lo - camera_x_lo siempre cae en 0-255).
     lda player_y_hi
     sta oam_buffer+0
-    lda player_x_hi
+    lda player_x_px_lo
+    sec
+    sbc camera_x_lo
     sta oam_buffer+3
 
     ; Parpadeo durante HURT (invulnerabilidad visual): oculta el sprite
@@ -1077,12 +1288,14 @@ mainloop:
 ; Reaparece a Chiquito en (SPAWN_X, SPAWN_Y), limpio de velocidad, y
 ; vuelve a STATE_IDLE. Usado al expirar STATE_DEAD.
 .proc respawn_player
-    lda #SPAWN_X
-    sta player_x_hi
+    lda #<SPAWN_X
+    sta player_x_px_lo
+    lda #>SPAWN_X
+    sta player_x_px_hi
     lda #SPAWN_Y
     sta player_y_hi
     lda #0
-    sta player_x_lo
+    sta player_x_frac
     sta player_y_lo
     sta player_vx_lo
     sta player_vx_hi
@@ -1120,6 +1333,183 @@ mainloop:
 @set_jump:
     lda #STATE_JUMP
     sta player_state
+    rts
+.endproc
+
+; Cámara horizontal + streaming de pantallas (F4.2). Llamada una vez por
+; frame desde el main loop, después de update_player. Dos trabajos:
+;   1) Recalcula camera_x (entera, sin suavizado) = clamp(player_x_px -
+;      CAMERA_OFFSET, 0, MAX_CAMERA_X). nmi la usa para PPUSCROLL y el
+;      bit de nametable de PPUCTRL.
+;   2) Si la pantalla lógica que debería verse (la actual o la
+;      siguiente, según hacia dónde mira la cámara) no es la que ya está
+;      cargada en su nametable físico correspondiente
+;      (nt_slot_screens[pantalla AND 1]), arranca una transmisión hacia
+;      ese nametable repartida en varios frames (ver @advance_stream),
+;      reutilizando ppu_queue_push -- nunca se escribe VRAM directo
+;      aquí, esto corre fuera de VBlank.
+; Regla de asignación de slot (fija, no cambia en tiempo de ejecución):
+; slot = pantalla_lógica AND 1 (pantalla 0,2,4.. -> $2000; 1,3,5.. ->
+; $2400). Como dos pantallas consecutivas siempre tienen paridad
+; distinta, "la actual" y "la siguiente" nunca compiten por el mismo
+; slot en el mismo frame.
+.proc update_camera_and_streaming
+    ; target = player_x_px (16 bits) - CAMERA_OFFSET, con signo.
+    sec
+    lda player_x_px_lo
+    sbc #CAMERA_OFFSET
+    sta camera_x_lo
+    lda player_x_px_hi
+    sbc #0
+    sta camera_x_hi
+
+    ; clamp inferior: si camera_x < 0 (con signo), camera_x = 0.
+    lda camera_x_hi
+    bpl @clamp_high_check
+    lda #0
+    sta camera_x_lo
+    sta camera_x_hi
+    jmp @after_clamp
+@clamp_high_check:
+    ; clamp superior: si camera_x > MAX_CAMERA_X, camera_x = MAX_CAMERA_X.
+    lda camera_x_lo
+    sta cmp_a_lo
+    lda camera_x_hi
+    sta cmp_a_hi
+    lda #<MAX_CAMERA_X
+    sta cmp_b_lo
+    lda #>MAX_CAMERA_X
+    sta cmp_b_hi
+    jsr cmp16_signed         ; N=1 si camera_x < MAX_CAMERA_X
+    bmi @after_clamp
+    lda #<MAX_CAMERA_X
+    sta camera_x_lo
+    lda #>MAX_CAMERA_X
+    sta camera_x_hi
+@after_clamp:
+
+    ; --- Streaming: si ya hay una transmisión en curso, solo avanzarla
+    ; (presupuesto de STREAM_BUDGET bytes/frame); si no, revisar si hace
+    ; falta arrancar una nueva. ---
+    lda stream_active
+    bne @advance_stream
+
+    ; ¿La pantalla actual (camera_x_hi) está en el slot que le toca?
+    lda camera_x_hi
+    sta cam_scratch
+    and #1
+    tax
+    lda cam_scratch
+    cmp nt_slot_screens,x
+    beq @check_next
+    sta stream_screen
+    stx stream_slot
+    jsr start_stream
+    rts
+
+@check_next:
+    ; ¿La pantalla siguiente está en el slot que le toca? (recortada al
+    ; final del nivel -- no hay pantalla LEVEL_SCREENS que transmitir).
+    lda cam_scratch
+    clc
+    adc #1
+    cmp #LEVEL_SCREENS
+    bcc @next_in_range
+    lda #(LEVEL_SCREENS-1)
+@next_in_range:
+    sta cam_scratch
+    and #1
+    tax
+    lda cam_scratch
+    cmp nt_slot_screens,x
+    beq @nothing_to_stream
+    sta stream_screen
+    stx stream_slot
+    jsr start_stream
+@nothing_to_stream:
+    rts
+
+@advance_stream:
+    ; Presupuesto en cam_scratch, no en X: ppu_queue_push usa X
+    ; internamente (ver su proc más abajo) y lo dejaría en un valor
+    ; distinto al que necesitamos para contar este bucle.
+    ldy #$00                 ; índice fijo en 0: se avanza el puntero mismo
+    lda #STREAM_BUDGET
+    sta cam_scratch
+@push_loop:
+    lda stream_remaining_lo
+    ora stream_remaining_hi
+    beq @stream_finished
+
+    lda (stream_src_lo),y
+    sta pq_data
+    lda stream_dst_hi
+    sta pq_addr_hi
+    lda stream_dst_lo
+    sta pq_addr_lo
+    jsr ppu_queue_push
+
+    inc stream_src_lo
+    bne @src_no_carry
+    inc stream_src_hi
+@src_no_carry:
+    inc stream_dst_lo
+    bne @dst_no_carry
+    inc stream_dst_hi
+@dst_no_carry:
+
+    lda stream_remaining_lo
+    bne @rem_dec_lo
+    dec stream_remaining_hi
+@rem_dec_lo:
+    dec stream_remaining_lo
+
+    dec cam_scratch
+    beq @budget_done
+    jmp @push_loop
+@budget_done:
+    rts
+
+@stream_finished:
+    lda stream_slot
+    tax
+    lda stream_screen
+    sta nt_slot_screens,x
+    lda #0
+    sta stream_active
+    rts
+.endproc
+
+; Arranca una transmisión de la pantalla lógica stream_screen hacia el
+; nametable físico stream_slot (0=$2000, 1=$2400). Llamado solo desde
+; update_camera_and_streaming, nunca cuando stream_active ya está en 1.
+.proc start_stream
+    lda stream_screen
+    asl a                     ; *2: cada entrada de scene_pradera_screen_ptrs son 2 bytes
+    tax
+    lda scene_pradera_screen_ptrs,x
+    sta stream_src_lo
+    lda scene_pradera_screen_ptrs+1,x
+    sta stream_src_hi
+
+    lda #<1024
+    sta stream_remaining_lo
+    lda #>1024
+    sta stream_remaining_hi
+
+    lda stream_slot
+    beq @slot0
+    lda #$24
+    jmp @slot_set
+@slot0:
+    lda #$20
+@slot_set:
+    sta stream_dst_hi
+    lda #$00
+    sta stream_dst_lo
+
+    lda #1
+    sta stream_active
     rts
 .endproc
 

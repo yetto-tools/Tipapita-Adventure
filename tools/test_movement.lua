@@ -1,10 +1,12 @@
 -- Prueba de humo para F3.2 (movimiento).
 -- Usa joypad.set para simular input real y lee la RAM de física del
--- jugador directamente (no asume, verifica):
---   $000D player_x_hi, $000F player_y_hi, $0011 player_vx_hi,
---   $0013 player_vy_hi, $0014 player_on_ground
+-- jugador directamente (no asume, verifica). Direcciones desde F4.2
+-- (ver player_x_px_hi, nuevo, corrió 1 byte todo lo que venía después
+-- de la X en el layout de ZEROPAGE de src/main.s):
+--   $000D player_x_px_lo, $0010 player_y_hi, $0012 player_vx_hi,
+--   $0014 player_vy_hi, $0015 player_on_ground
 
-local X_HI, Y_HI, VX_HI, VY_HI, ON_GROUND = 0x000D, 0x000F, 0x0011, 0x0013, 0x0014
+local X_HI, Y_HI, VX_HI, VY_HI, ON_GROUND = 0x000D, 0x0010, 0x0012, 0x0014, 0x0015
 local GROUND_Y = 179
 
 local out = io.open("/tmp/fceux_test_movement.txt", "w")

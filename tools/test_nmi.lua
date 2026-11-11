@@ -17,9 +17,19 @@ local function log(line)
 	out:write(line .. "\n")
 end
 
--- Deja que termine el reset.
-for _ = 1, 5 do
+-- Deja que termine el reset. F4.2: `reset` ahora copia 2 pantallas de
+-- nametable en vez de 1 (ver src/main.s), así que tarda más frames
+-- reales en terminar que antes (~7, no ~5) -- en vez de asumir un
+-- número fijo de frames, se espera a la señal real de que el main loop
+-- ya corrió al menos una vez (frame_count > 0), con un tope de
+-- seguridad para no colgarse si algo realmente se rompe.
+local booted = false
+for _ = 1, 60 do
 	emu.frameadvance()
+	if memory.readbyte(FRAME_COUNT_ADDR) > 0 then
+		booted = true
+		break
+	end
 end
 
 local count_before = memory.readbyte(FRAME_COUNT_ADDR)
@@ -38,11 +48,12 @@ local pc_in_fixed_bank = (pc >= 0xC000 and pc <= 0xFFF9)
 
 local overflow = memory.readbyte(PPU_QUEUE_OVERFLOW_ADDR)
 
+log(string.format("reset_termino=%s", tostring(booted)))
 log(string.format("frame_count antes=%d despues=%d delta=%d (esperado=%d)", count_before, count_after, delta, N))
 log(string.format("PC=$%04X en_banco_fijo=%s", pc, tostring(pc_in_fixed_bank)))
 log(string.format("ppu_queue_overflow=%d", overflow))
 
-local pass = (delta == N) and pc_in_fixed_bank and (overflow == 0)
+local pass = booted and (delta == N) and pc_in_fixed_bank and (overflow == 0)
 log("RESULT=" .. (pass and "PASS" or "FAIL"))
 out:close()
 emu.exit()

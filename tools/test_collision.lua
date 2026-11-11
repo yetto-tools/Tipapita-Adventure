@@ -4,7 +4,9 @@
 -- como se espera: techo, pared, aterrizaje en el suelo, y que el
 -- peligro hace reaparecer a Chiquito.
 
-local X_HI, Y_HI, VX_LO, VX_HI, VY_LO, VY_HI, ON_GROUND = 0x000D, 0x000F, 0x0010, 0x0011, 0x0012, 0x0013, 0x0014
+-- Direcciones desde F4.2 (player_x_px_hi, nuevo, corrió 1 byte todo lo
+-- que venía después de la X en el layout de ZEROPAGE de src/main.s).
+local X_HI, Y_HI, VX_LO, VX_HI, VY_LO, VY_HI, ON_GROUND = 0x000D, 0x0010, 0x0011, 0x0012, 0x0013, 0x0014, 0x0015
 
 local out = io.open("/tmp/fceux_test_collision.txt", "w")
 local function log(line)

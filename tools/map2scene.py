@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compila un mapa de nivel (formato de texto, F4.1) a los bytes de
+"""Compila un mapa de nivel (formato de texto, F4.1/F4.2) a los datos de
 nametable + atributos + mapa de colisión + punto de aparición, listos
 para copiar a VRAM/usar en tiempo de ejecución.
 
@@ -13,10 +13,12 @@ Formato del archivo de mapa:
     leyenda: qué metatile representa cada carácter. METATILES más abajo
     lista los nombres válidos.
   - Una línea en blanco separa la leyenda de la grilla.
-  - La grilla: exactamente MT_ROWS líneas de MT_COLS caracteres.
+  - La grilla: exactamente MT_ROWS líneas. El ancho (número de
+    caracteres por línea) debe ser múltiplo de 16 -- cada bloque de 16
+    columnas es "una pantalla" (F4.2): un nametable completo de VRAM.
   - 'S' es especial: además de usar su metatile de leyenda normalmente,
     marca esa celda como el punto de aparición del jugador (debe haber
-    exactamente una 'S' en el mapa). Se calcula en píxeles como
+    exactamente una 'S' en el mapa). Se calcula en píxeles de MUNDO como
     SPAWN_X = columna*16, SPAWN_Y = fila*16 + 8 -- alineado abajo/
     izquierda dentro de la celda de 16x16, para que el hitbox de 8x8
     del jugador (ver PLAYER_HITBOX_* en src/main.s) quede parado justo
@@ -25,15 +27,20 @@ Formato del archivo de mapa:
 Metatile = (tile_tl, tile_tr, tile_bl, tile_br, paleta, colisión).
 Colisión: 0=vacío, 1=sólido, 2=plataforma (un sentido), 3=peligro.
 
-Límite de tamaño y compresión (F4.1): un mapa = una pantalla completa
-de 16x15 metatiles = un nametable (32x30 tiles). Sin compresión: cada
-mapa compilado pesa 960+64+240=1264 bytes de PRG-ROM. Con 128 KB de
-PRG-ROM totales, caben ~100 mapas de este tamaño sin necesidad de
-comprimir nada. Si el contenido completo (Fase 8) se acerca a ese
-límite, la compresión run-length (RLE) es la técnica estándar de NES
-para esto -- no se implementa todavía porque no hace falta. Mapas más
-grandes que una pantalla (scroll entre pantallas, carga progresiva) son
-trabajo de F4.2/F4.3, no de este formato todavía.
+F4.2 (múltiples pantallas / scroll): un mapa de N*16 columnas se compila
+a N bloques de 1024 bytes (960 de tiles + 64 de atributos cada uno, el
+layout exacto de un nametable de VRAM) más UN SOLO mapa de colisión que
+cubre el nivel completo (LEVEL_COLS x MT_ROWS, sin dividir por
+pantalla -- la colisión vive en ROM accesible en cualquier momento, a
+diferencia de los nametables en VRAM que solo caben 2 a la vez).
+
+Límite de tamaño y compresión: cada pantalla compilada pesa 1024 bytes
+de PRG-ROM (sin comprimir) más su porción del mapa de colisión (MT_ROWS
+bytes por columna). Con 128 KB de PRG-ROM, caben decenas de pantallas
+de este tamaño sin necesidad de comprimir nada. Si el contenido completo
+(Fase 8) se acerca a ese límite, la compresión run-length (RLE) es la
+técnica estándar de NES para esto -- no se implementa todavía porque no
+hace falta.
 """
 
 import sys
@@ -59,7 +66,7 @@ METATILES = {
     "HAZARD": (T_GROUND_TOP, T_GROUND_TOP, T_GROUND_FILL, T_GROUND_FILL, PAL_PELIGRO, COLLISION_HAZARD),
 }
 
-MT_COLS = 16
+SCREEN_COLS = 16   # ancho de una pantalla/nametable, en metatiles -- fijo, es hardware.
 MT_ROWS = 15
 
 
@@ -90,11 +97,15 @@ def parse_map(path):
     if len(grid_lines) != MT_ROWS:
         raise ValueError(f"se esperaban {MT_ROWS} filas de grilla, se encontraron {len(grid_lines)}")
 
+    width = len(grid_lines[0])
+    if width == 0 or width % SCREEN_COLS != 0:
+        raise ValueError(f"el ancho de la grilla ({width}) debe ser múltiplo de {SCREEN_COLS}")
+
     grid = []
     spawn = None
     for r, line in enumerate(grid_lines):
-        if len(line) != MT_COLS:
-            raise ValueError(f"la fila {r} de la grilla tiene {len(line)} caracteres, se esperaban {MT_COLS}: {line!r}")
+        if len(line) != width:
+            raise ValueError(f"la fila {r} de la grilla tiene {len(line)} caracteres, se esperaban {width}: {line!r}")
         row = []
         for c, ch in enumerate(line):
             if ch not in legend:
@@ -109,17 +120,18 @@ def parse_map(path):
     if spawn is None:
         raise ValueError("el mapa no tiene punto de aparición ('S'); debe haber exactamente uno")
 
-    return grid, spawn
+    return grid, width, spawn
 
 
-def compile_scene(grid):
+def compile_screen(grid, col_offset):
+    """Compila las 16 columnas de grid empezando en col_offset a los
+    960 bytes de tiles + 64 de atributos de una pantalla/nametable."""
     tile_bytes = [0] * (32 * 30)
     attr_bytes = [0] * 64
-    collision_bytes = [0] * (MT_COLS * MT_ROWS)
 
     for mr in range(MT_ROWS):
-        for mc in range(MT_COLS):
-            tl, tr, bl, br, pal, collision = METATILES[grid[mr][mc]]
+        for mc in range(SCREEN_COLS):
+            tl, tr, bl, br, pal, _collision = METATILES[grid[mr][col_offset + mc]]
             base_row = mr * 2
             base_col = mc * 2
             tile_bytes[(base_row + 0) * 32 + base_col + 0] = tl
@@ -127,17 +139,25 @@ def compile_scene(grid):
             tile_bytes[(base_row + 1) * 32 + base_col + 0] = bl
             tile_bytes[(base_row + 1) * 32 + base_col + 1] = br
 
-            # Cada byte de atributo cubre un bloque de 2x2 metatiles.
             ar, ac = mr // 2, mc // 2
             quadrant = (mr % 2) * 2 + (mc % 2)  # 0=TL,1=TR,2=BL,3=BR
             attr_bytes[ar * 8 + ac] |= (pal & 0b11) << (quadrant * 2)
 
-            collision_bytes[mr * MT_COLS + mc] = collision
-
-    return tile_bytes, attr_bytes, collision_bytes
+    return tile_bytes, attr_bytes
 
 
-def emit_ca65(tile_bytes, attr_bytes, collision_bytes, spawn_x, spawn_y, out_path):
+def compile_collision(grid, width):
+    """Mapa de colisión del nivel completo (width x MT_ROWS), un byte
+    por metatile, índice = fila*width + columna."""
+    collision_bytes = [0] * (width * MT_ROWS)
+    for mr in range(MT_ROWS):
+        for mc in range(width):
+            _tl, _tr, _bl, _br, _pal, collision = METATILES[grid[mr][mc]]
+            collision_bytes[mr * width + mc] = collision
+    return collision_bytes
+
+
+def emit_ca65(screens, collision_bytes, width, spawn_x, spawn_y, out_path):
     def byte_rows(data, per_line=16):
         lines = []
         for i in range(0, len(data), per_line):
@@ -145,6 +165,7 @@ def emit_ca65(tile_bytes, attr_bytes, collision_bytes, spawn_x, spawn_y, out_pat
             lines.append("    .byte " + ", ".join(f"${b:02X}" for b in chunk))
         return lines
 
+    num_screens = len(screens)
     lines = [
         "; Generado automáticamente por tools/map2scene.py.",
         "; No editar a mano -- los cambios se pierden en la siguiente compilación.",
@@ -152,16 +173,38 @@ def emit_ca65(tile_bytes, attr_bytes, collision_bytes, spawn_x, spawn_y, out_pat
         "",
         f"SPAWN_X = {spawn_x}",
         f"SPAWN_Y = {spawn_y}",
+        f"LEVEL_SCREENS = {num_screens}",
+        f"LEVEL_COLS = {width}",
         "",
         '.segment "RODATA"',
         "",
-        "scene_pradera_tiles:",
-    ] + byte_rows(tile_bytes) + [
+        "; Tabla de punteros a cada pantalla (1024 bytes: 960 de tiles +",
+        "; 64 de atributos, el layout exacto de un nametable de VRAM).",
+        "scene_pradera_screen_ptrs:",
+        "    .addr " + ", ".join(f"scene_pradera_screen{i}" for i in range(num_screens)),
         "",
-        "scene_pradera_attrs:",
-    ] + byte_rows(attr_bytes) + [
+    ]
+    for i, (tile_bytes, attr_bytes) in enumerate(screens):
+        lines.append(f"scene_pradera_screen{i}:")
+        lines += byte_rows(tile_bytes)
+        lines += byte_rows(attr_bytes)
+        lines.append("")
+
+    row_offsets = [r * width for r in range(MT_ROWS)]
+    lines += [
+        "; Offset (de 16 bits) del inicio de cada fila dentro de",
+        "; scene_pradera_collision = fila*LEVEL_COLS. Tabla precalculada en",
+        "; vez de multiplicar en tiempo de ejecución (LEVEL_COLS no es",
+        "; potencia de 2, así que no hay truco de enmascarar bits).",
+        "scene_pradera_row_offset_lo:",
+        "    .byte " + ", ".join(f"${o & 0xFF:02X}" for o in row_offsets),
+        "scene_pradera_row_offset_hi:",
+        "    .byte " + ", ".join(f"${(o >> 8) & 0xFF:02X}" for o in row_offsets),
         "",
-        "; 1 byte por metatile (16 columnas x 15 filas); índice = fila*16 + columna.",
+    ]
+    lines += [
+        "; Mapa de colisión del nivel completo (LEVEL_COLS x MT_ROWS),",
+        "; 1 byte por metatile; índice = fila*LEVEL_COLS + columna.",
         "; 0=vacío, 1=sólido, 2=plataforma (un sentido), 3=peligro.",
         "scene_pradera_collision:",
     ] + byte_rows(collision_bytes)
@@ -170,8 +213,8 @@ def emit_ca65(tile_bytes, attr_bytes, collision_bytes, spawn_x, spawn_y, out_pat
         f.write("\n".join(lines) + "\n")
 
     print(
-        f"OK: {out_path} ({len(tile_bytes)} bytes de tiles, {len(attr_bytes)} de "
-        f"atributos, {len(collision_bytes)} de colisión, spawn=({spawn_x},{spawn_y}))"
+        f"OK: {out_path} ({num_screens} pantallas x 1024 bytes, "
+        f"{len(collision_bytes)} bytes de colisión, spawn=({spawn_x},{spawn_y}))"
     )
 
 
@@ -182,12 +225,15 @@ def main():
 
     map_path, out_path = sys.argv[1], sys.argv[2]
     try:
-        grid, (spawn_x, spawn_y) = parse_map(map_path)
-        tile_bytes, attr_bytes, collision_bytes = compile_scene(grid)
-        assert len(tile_bytes) == 960
-        assert len(attr_bytes) == 64
-        assert len(collision_bytes) == MT_COLS * MT_ROWS
-        emit_ca65(tile_bytes, attr_bytes, collision_bytes, spawn_x, spawn_y, out_path)
+        grid, width, (spawn_x, spawn_y) = parse_map(map_path)
+        num_screens = width // SCREEN_COLS
+        screens = [compile_screen(grid, s * SCREEN_COLS) for s in range(num_screens)]
+        for tile_bytes, attr_bytes in screens:
+            assert len(tile_bytes) == 960
+            assert len(attr_bytes) == 64
+        collision_bytes = compile_collision(grid, width)
+        assert len(collision_bytes) == width * MT_ROWS
+        emit_ca65(screens, collision_bytes, width, spawn_x, spawn_y, out_path)
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         sys.exit(1)

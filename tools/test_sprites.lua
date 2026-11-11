@@ -12,7 +12,7 @@
 --      ($2002 bit 5) -- tenemos muy pocos sprites, así que esto debería
 --      cumplirse siempre, pero se valida el mecanismo real, no se asume.
 
-local X_HI, Y_HI, VX_HI, VX_LO, VY_HI, VY_LO = 0x000D, 0x000F, 0x0011, 0x0010, 0x0013, 0x0012
+local X_HI, Y_HI, VX_HI, VX_LO, VY_HI, VY_LO = 0x000D, 0x0010, 0x0012, 0x0011, 0x0014, 0x0013  -- F4.2: direcciones +1 desde player_y_lo (player_x_px_hi nuevo)
 
 local out = io.open("/tmp/fceux_test_sprites.txt", "w")
 local function log(line)
@@ -56,7 +56,14 @@ for _ = 1, 30 do
 	if tile_walking ~= tile_idle then saw_walk_tile = true end
 end
 
-local px, py = memory.readbyte(X_HI), memory.readbyte(Y_HI)
+-- F4.2: X_HI es de MUNDO (player_x_px_lo), no de pantalla. Tras caminar
+-- a la derecha la cámara ya se movió (ver update_camera_and_streaming
+-- en src/main.s), así que hay que restar camera_x_lo -- la misma resta
+-- de 8 bits que hace @animate para escribir el X real al OAM -- antes
+-- de usar la posición para samplear el framebuffer.
+local CAMERA_X_LO = 0x0023
+local px_world, py = memory.readbyte(X_HI), memory.readbyte(Y_HI)
+local px = (px_world - memory.readbyte(CAMERA_X_LO)) % 256
 local cr, cg, cb = sample("chiquito", px + 4, py + 4)
 local er, eg, eb = sample("enemigo", 184, 184)
 local ir_, ig, ib = sample("item", 144, 104)

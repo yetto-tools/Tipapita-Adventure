@@ -4,8 +4,10 @@
 -- ATTACK (enraíza el movimiento), HURT (knockback + parpadeo tras
 -- peligro), y DEAD (congelado tras caer, luego reaparece).
 
-local X_HI, Y_HI, VX_HI = 0x000D, 0x000F, 0x0011
-local STATE, TIMER = 0x0016, 0x0017
+-- Direcciones desde F4.2 (player_x_px_hi, nuevo, corrió 1 byte todo lo
+-- que venía después de la X en el layout de ZEROPAGE de src/main.s).
+local X_HI, Y_HI, VX_HI = 0x000D, 0x0010, 0x0012
+local STATE, TIMER = 0x0017, 0x0018
 
 local STATE_IDLE, STATE_WALK, STATE_JUMP, STATE_FALL = 0, 1, 2, 3
 local STATE_ATTACK, STATE_HURT, STATE_DEAD = 4, 5, 6
@@ -24,8 +26,8 @@ end
 for i = 1, 100 do
 	joypad.set(1, {})
 	emu.frameadvance()
-	if memory.readbyte(0x0001) >= 5 and memory.readbyte(VX_HI) == 0 and memory.readbyte(0x0010) == 0
-		and memory.readbyte(0x0013) == 0 and memory.readbyte(0x0012) == 0 then
+	if memory.readbyte(0x0001) >= 5 and memory.readbyte(VX_HI) == 0 and memory.readbyte(0x0011) == 0
+		and memory.readbyte(0x0014) == 0 and memory.readbyte(0x0013) == 0 then
 		break
 	end
 end
@@ -47,7 +49,7 @@ joypad.set(1, {})
 for _ = 1, 100 do
 	joypad.set(1, {})
 	emu.frameadvance()
-	if memory.readbyte(0x0014) == 1 then break end -- esperar a estar en el suelo primero
+	if memory.readbyte(0x0015) == 1 then break end -- esperar a estar en el suelo primero
 end
 local saw_jump, saw_fall = false, false
 joypad.set(1, { A = true })
@@ -59,7 +61,7 @@ for _ = 1, 60 do
 	local s = st()
 	if s == STATE_JUMP then saw_jump = true end
 	if s == STATE_FALL then saw_fall = true end
-	if memory.readbyte(0x0014) == 1 then break end
+	if memory.readbyte(0x0015) == 1 then break end
 end
 local landed_state = st()
 log(string.format("salto: vio_jump=%s vio_fall=%s tras_aterrizar=%d", tostring(saw_jump), tostring(saw_fall), landed_state))
@@ -119,11 +121,11 @@ end
 -- la celda de peligro (columna 12 = píxeles 192-207).
 memory.writebyte(X_HI, 210)
 memory.writebyte(Y_HI, 152)
-memory.writebyte(0x0010, 0) -- vx_lo
+memory.writebyte(0x0011, 0) -- vx_lo
 memory.writebyte(VX_HI, 0)
-memory.writebyte(0x0012, 0) -- vy_lo
-memory.writebyte(0x0013, 0) -- vy_hi
-memory.writebyte(0x0014, 0) -- on_ground=0: ya está sobre el hueco, nada la sostiene
+memory.writebyte(0x0013, 0) -- vy_lo
+memory.writebyte(0x0014, 0) -- vy_hi
+memory.writebyte(0x0015, 0) -- on_ground=0: ya está sobre el hueco, nada la sostiene
 memory.writebyte(STATE, STATE_FALL)
 
 local saw_dead = false

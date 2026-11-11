@@ -8,7 +8,9 @@
 # F2.2-F4.1 sin cambios (nube, techo, pared, plataforma, peligro, hueco,
 # aparicion). Pantalla 1 (16-31) agrega una pared y una plataforma
 # nuevas. Pantalla 2 (32-47) agrega un peligro y una nube nuevos, sin
-# hueco (zona segura de "fin de nivel" para esta prueba).
+# hueco (zona segura de "fin de nivel" para esta prueba), y una puerta
+# (columna 46, fila 9) que lleva a la Casa Pipapita, la habitacion fija
+# de F4.3.
 # 'S' es especial: ademas de su metatile de leyenda, marca el punto de
 # aparicion del jugador (debe haber exactamente uno).
 .=SKY
@@ -19,6 +21,7 @@ P=PLATFORM
 W=WALL
 H=HAZARD
 S=SKY
+D=DOOR
 
 ................................................
 ................................................
@@ -29,7 +32,7 @@ S=SKY
 ..........P.................P...................
 .W....WW................W.......................
 .W......................W.......................
-.W....S.................W.......................
+.W....S.................W.....................D.
 GGGGGGGGGGGGH..GGGGGGGGGGGGGGGGGGGGGGGGGHGGGGGGG
 FFFFFFFFFFFFF..FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF
 FFFFFFFFFFFFF..FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF

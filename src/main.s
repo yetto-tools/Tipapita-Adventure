@@ -95,14 +95,16 @@
 .include "data/palettes.s"
 .include "../dist/tiles_pradera.s"
 .include "../dist/scene_pradera.s"
+.include "../dist/scene_casa.s"
 .include "../dist/tiles_sprites.s"
 
-; Índices de tile de sprite (dentro de tiles_sprites, offset +5 porque
-; van después de los 5 tiles de fondo en el mismo CHR-ROM).
-TILE_CHIQUITO_IDLE = 5
-TILE_CHIQUITO_WALK = 6
-TILE_ENEMY         = 7
-TILE_ITEM          = 8
+; Índices de tile de sprite (dentro de tiles_sprites, offset +6 porque
+; van después de los 6 tiles de fondo en el mismo CHR-ROM -- 5 de la
+; pradera + la puerta agregada en F4.3).
+TILE_CHIQUITO_IDLE = 6
+TILE_CHIQUITO_WALK = 7
+TILE_ENEMY         = 8
+TILE_ITEM          = 9
 
 ; Hitbox del jugador (definida en F2.3, usada desde F3.3). Un sprite de
 ; 8x8 completo, sin margen todavía.
@@ -127,6 +129,7 @@ COLLISION_EMPTY    = 0
 COLLISION_SOLID    = 1
 COLLISION_PLATFORM = 2
 COLLISION_HAZARD   = 3
+COLLISION_DOOR     = 4
 
 ; Estados del jugador (F3.4). IDLE/WALK/JUMP/FALL se recalculan cada
 ; frame a partir de la física (on_ground, vx, vy) cuando no hay un
@@ -158,15 +161,28 @@ KNOCKBACK_VY     = $FC00   ; -4.0 px/frame, empuje vertical (mismo valor que JUM
 ; "muerte por caída" sin necesitar un sistema de vida real todavía.
 DEATH_Y_THRESHOLD = 224
 
-; F4.2 (cámara/scroll). LEVEL_COLS/LEVEL_SCREENS vienen de
-; dist/scene_pradera.s (generados por tools/map2scene.py a partir de
-; assets/maps/pradera.txt). CAMERA_OFFSET centra a Chiquito a 120px del
+; F4.2 (cámara/scroll). CAMERA_OFFSET centra a Chiquito a 120px del
 ; borde izquierdo de la pantalla visible (256px de ancho); camera_x se
 ; recalcula entero cada frame (sin suavizado) y se recorta a
-; [0, MAX_CAMERA_X] para no mostrar nada fuera del nivel.
+; [0, room_max_camera] para no mostrar nada fuera del nivel.
+; F4.3: el límite superior de la cámara (antes MAX_CAMERA_X, una sola
+; constante de compilación porque solo existía un nivel) ahora varía
+; por habitación -- cada habitación tiene su propio ancho, así que es
+; un valor de RUNTIME (room_max_camera_lo/hi) que `load_room` carga
+; desde `room_descriptors`, no una constante fija.
 CAMERA_OFFSET   = 120
-LEVEL_WIDTH_PX  = LEVEL_COLS * 16
-MAX_CAMERA_X    = LEVEL_WIDTH_PX - 256
+
+; F4.3 (habitaciones). Con solo 2 habitaciones en este milestone, el
+; ID de habitación es simplemente 0/1 y el destino de cada puerta está
+; hardcodeado como "la otra habitación" (ver @door_hit en update_player)
+; -- no hay todavía un mapa genérico de puertas->destinos.
+ROOM_PRADERA   = 0
+ROOM_CASA      = 1
+; Tamaño en bytes de cada registro de room_descriptors (ver la tabla
+; más abajo): 2 (colisión) + 2 (puntero fila lo) + 2 (puntero fila hi)
+; + 2 (puntero a pantallas) + 1 (cantidad de pantallas) + 2 (cámara
+; máxima) + 2 (spawn X) + 1 (spawn Y) = 14.
+ROOM_DESC_SIZE = 14
 
 ; Presupuesto de bytes transmitidos por frame hacia el nametable físico
 ; que está fuera de vista (streaming de pantallas, ver
@@ -193,12 +209,41 @@ PAD_LEFT   = %00000010
 PAD_RIGHT  = %00000001
 
 .segment "RODATA"
-; OAM inicial (3 sprites de prueba): Y, tile, atributos, X.
-; Atributos bits0-1 = subpaleta de sprite (0=jugador,1=enemigo,2=ítem).
+; OAM inicial (3 sprites de prueba): Y, tile, atributos, X. Posición de
+; Chiquito es solo un valor placeholder -- load_room (llamado desde
+; reset antes del primer frame) la pisa con la posición real de la
+; habitación inicial, y @animate la mantiene correcta todos los frames
+; después de eso.
 oam_init_data:
-    .byte SPAWN_Y, TILE_CHIQUITO_IDLE, %00000000, SPAWN_X   ; Chiquito
+    .byte SCENE_PRADERA_SPAWN_Y, TILE_CHIQUITO_IDLE, %00000000, SCENE_PRADERA_SPAWN_X
     .byte 179,     TILE_ENEMY,         %00000001, 180       ; enemigo
     .byte 99,      TILE_ITEM,          %00000010, 140       ; coleccionable
+
+; Descriptor de cada habitación (F4.3): un registro de ROOM_DESC_SIZE
+; bytes por habitación, indexado por ROOM_PRADERA/ROOM_CASA*ROOM_DESC_SIZE
+; -- ver load_room, que lo lee campo por campo. "cámara máxima" se
+; calcula una sola vez aquí, en tiempo de compilación, a partir del
+; ancho real de cada mapa (antes era una sola constante MAX_CAMERA_X
+; porque solo existía un nivel).
+room_descriptors:
+    ; ROOM_PRADERA
+    .addr scene_pradera_collision
+    .addr scene_pradera_row_offset_lo
+    .addr scene_pradera_row_offset_hi
+    .addr scene_pradera_screen_ptrs
+    .byte SCENE_PRADERA_LEVEL_SCREENS
+    .word (SCENE_PRADERA_LEVEL_COLS * 16 - 256)
+    .word SCENE_PRADERA_SPAWN_X
+    .byte SCENE_PRADERA_SPAWN_Y
+    ; ROOM_CASA
+    .addr scene_casa_collision
+    .addr scene_casa_row_offset_lo
+    .addr scene_casa_row_offset_hi
+    .addr scene_casa_screen_ptrs
+    .byte SCENE_CASA_LEVEL_SCREENS
+    .word (SCENE_CASA_LEVEL_COLS * 16 - 256)
+    .word SCENE_CASA_SPAWN_X
+    .byte SCENE_CASA_SPAWN_Y
 
 .segment "RODATA"
 ; R0,R1: ventanas CHR de 2KB -> banco 0. R2-R5: ventanas CHR de 1KB -> banco 0.
@@ -294,6 +339,21 @@ stream_dst_lo:   .res 1
 stream_dst_hi:   .res 1
 stream_remaining_lo: .res 1
 stream_remaining_hi: .res 1
+
+; Descriptor de la habitación ACTUAL (F4.3), cargado desde
+; room_descriptors por load_room cada vez que se cambia de habitación.
+; get_tile_collision/start_stream/update_camera_and_streaming leen
+; estas variables en vez de símbolos fijos de compilación, porque ahora
+; hay más de un mapa en el mismo binario.
+room_current:      .res 1   ; ROOM_PRADERA o ROOM_CASA -- usado por respawn_player y por el destino de puertas
+room_collision_lo: .res 1
+room_collision_hi: .res 1
+room_row_lo_ptr:   .res 2   ; puntero (zp),y hacia scene_X_row_offset_lo de la habitación actual
+room_row_hi_ptr:   .res 2   ; puntero (zp),y hacia scene_X_row_offset_hi de la habitación actual
+room_screen_ptrs:  .res 2   ; puntero (zp),y hacia scene_X_screen_ptrs de la habitación actual
+room_screens:      .res 1   ; cantidad de pantallas de la habitación actual (antes LEVEL_SCREENS)
+room_max_camera_lo: .res 1  ; cámara máxima de la habitación actual (antes MAX_CAMERA_X)
+room_max_camera_hi: .res 1
 
 .segment "BSS"
 ppu_queue_len:       .res 1
@@ -425,25 +485,14 @@ oam_buffer: .res 256  ; página $0200-$02FF, fuente de la OAM DMA ($4014)
     cpx #12
     bne @oam_copy
 
-    ; F3.2/F3.3: posición/estado inicial de Chiquito, en punto fijo 8.8.
-    ; Coincide con la posición estática que se acaba de copiar al OAM
-    ; (SPAWN_Y/SPAWN_X, el punto de reaparición definido en la escena),
-    ; para que el primer frame no "salte". F4.2: SPAWN_X es de mundo
-    ; (hasta LEVEL_WIDTH_PX), por eso se parte en low/high.
-    lda #<SPAWN_X
-    sta player_x_px_lo
-    lda #>SPAWN_X
-    sta player_x_px_hi
-    lda #SPAWN_Y
-    sta player_y_hi
-    lda #1
-    sta player_on_ground
-    sta player_facing_right
     ; Re-cero defensivo de posición fraccional y velocidad: ya deberían
     ; estar en 0 por la limpieza de RAM de arriba, pero se deja explícito
     ; aquí (inmediatamente antes de que arranque el main loop) para no
     ; depender de esa limpieza si el código de más arriba cambia alguna
-    ; vez de orden.
+    ; vez de orden. La posición/estado real de Chiquito (F3.2/F3.3) la
+    ; pone `load_room` más abajo, igual que la carga de nametables
+    ; (F4.3: ahora es una habitación entre varias, no un paso fijo
+    ; de `reset`).
     lda #0
     sta player_x_frac
     sta player_y_lo
@@ -476,67 +525,14 @@ oam_buffer: .res 256  ; página $0200-$02FF, fuente de la OAM DMA ($4014)
     cpx #32
     bne @copypalette
 
-    ; F4.2: carga las 2 primeras pantallas lógicas (0 y 1) a los 2
-    ; nametables físicos ($2000 y $2400 -- el mirroring vertical del
-    ; MMC3 programado arriba los separa en VRAM física distinta). Cada
-    ; pantalla compilada por tools/map2scene.py ya son 1024 bytes
-    ; contiguos (960 de tiles + 64 de atributos) en el layout EXACTO de
-    ; un nametable de VRAM, así que una sola copia alcanza por pantalla
-    ; -- ya no hace falta separar tiles/atributos como antes de F4.2.
-    ; nt_slot_screens[slot] = qué pantalla lógica vive en ese nametable
-    ; ahora mismo; aquí coincide 1:1 con la regla fija pantalla&1=slot
-    ; que usa update_camera_and_streaming más abajo.
-    bit $2002
-    lda #$20
-    sta $2006
-    lda #$00
-    sta $2006
-    lda #<scene_pradera_screen0
-    sta pbulk_src
-    lda #>scene_pradera_screen0
-    sta pbulk_src+1
-    lda #<1024
-    sta pbulk_len
-    lda #>1024
-    sta pbulk_len+1
-    jsr ppu_copy_bulk
-
-    bit $2002
-    lda #$24
-    sta $2006
-    lda #$00
-    sta $2006
-    lda #<scene_pradera_screen1
-    sta pbulk_src
-    lda #>scene_pradera_screen1
-    sta pbulk_src+1
-    lda #<1024
-    sta pbulk_len
-    lda #>1024
-    sta pbulk_len+1
-    jsr ppu_copy_bulk
-
-    lda #0
-    sta nt_slot_screens+0
-    lda #1
-    sta nt_slot_screens+1
-
-    ; Reinicia el latch de scroll/dirección para dejar la PPU en un estado
-    ; conocido.
-    bit $2002
-    lda #$00
-    sta $2005
-    sta $2005
-
-    ; Habilita generación de NMI, patrón de sprites en pattern table 1
-    ; (bit3) y renderizado de fondo + sprites (F2.3: ya hay sprites
-    ; reales en el OAM). camera_x_hi es 0 aquí (todavía no corrió ni un
-    ; frame), así que el bit de nametable coincide con PPUCTRL_BASE sin
-    ; ajuste -- nmi toma el control de este registro desde el próximo NMI.
-    lda #PPUCTRL_BASE
-    sta $2000
-    lda #%00011110           ; PPUMASK: fondo+sprites, incluyendo los 8px izquierdos
-    sta $2001
+    ; F4.3: load_room hace todo lo que antes hacía `reset` directamente
+    ; (cargar nametable(s), reiniciar cámara/streaming, posicionar a
+    ; Chiquito) -- ahora generalizado para poder repetirse cada vez que
+    ; se cruza una puerta, no solo al arrancar. Deja fondo+sprites
+    ; habilitados al volver (PPUMASK), así que no hace falta nada más
+    ; después de esta llamada.
+    lda #ROOM_PRADERA
+    jsr load_room
 
 mainloop:
     lda frame_ready
@@ -648,18 +644,21 @@ mainloop:
 .endproc
 
 ; Devuelve en A el tipo de colisión (COLLISION_*) del metatile que
-; contiene el punto de píxel de MUNDO (col_x_hi:col_x_lo, col_y).
-; Metatiles de 16x16px; índice = fila*LEVEL_COLS + columna.
+; contiene el punto de píxel de MUNDO (col_x_hi:col_x_lo, col_y), DENTRO
+; DE LA HABITACIÓN ACTUAL (room_current). Metatiles de 16x16px; índice
+; = fila*ancho_de_la_habitación + columna.
 ;
 ; F4.2: a diferencia de F3.3 (una sola pantalla de 16 columnas, donde
-; fila*16 era literalmente "el nibble alto de col_y"), LEVEL_COLS=48 no
-; es potencia de 2 -- no hay truco de enmascarar bits para la fila. En
-; vez de multiplicar en tiempo de ejecución, se usa una tabla
-; precalculada (scene_pradera_row_offset_lo/hi, generada por
-; tools/map2scene.py) y un puntero indirecto de 16 bits hacia
-; scene_pradera_collision (ver nota de archivo sobre "Indirect-indexed
-; addressing" para tablas >256 bytes -- el mapa de colisión completo ya
-; pesa 720 bytes).
+; fila*16 era literalmente "el nibble alto de col_y"), un ancho de nivel
+; que no es potencia de 2 no permite el truco de enmascarar bits para
+; la fila. En vez de multiplicar en tiempo de ejecución, se usa una
+; tabla precalculada por mapa (tools/map2scene.py genera
+; scene_X_row_offset_lo/hi) y un puntero indirecto de 16 bits.
+; F4.3: con más de un mapa en el mismo binario, ya no se puede indexar
+; directo contra `scene_pradera_row_offset_*`/`scene_pradera_collision`
+; (símbolos fijos de compilación) -- `load_room` carga en
+; room_row_lo_ptr/room_row_hi_ptr/room_collision_lo/hi los de la
+; habitación actual, y aquí se leen esos indirectamente.
 .proc get_tile_collision
     ; fila = col_y >> 4 (0-14; cabe en 1 byte, no hay scroll vertical).
     lda col_y
@@ -667,22 +666,23 @@ mainloop:
     lsr a
     lsr a
     lsr a
-    tax
+    tay
 
-    ; col_ptr = &scene_pradera_collision + row_offset[fila]
-    lda scene_pradera_row_offset_lo,x
+    ; col_ptr = room_collision + row_offset[fila] (de la habitación actual)
+    lda (room_row_lo_ptr),y
     clc
-    adc #<scene_pradera_collision
+    adc room_collision_lo
     sta col_ptr_lo
-    lda scene_pradera_row_offset_hi,x
-    adc #>scene_pradera_collision
+    lda (room_row_hi_ptr),y
+    adc room_collision_hi
     sta col_ptr_hi
 
-    ; columna = col_x (16 bits) >> 4 (0-47; tras desplazar 4 veces el
-    ; valor de 16 bits, el byte alto queda en 0 porque LEVEL_WIDTH_PX
-    ; < 4096 -- el resultado cabe entero en el byte bajo). Técnica
-    ; estándar: LSR del byte alto seguido de ROR del bajo, 4 veces,
-    ; propaga el acarreo entre ambos bytes como una sola división.
+    ; columna = col_x (16 bits) >> 4 (0-47 como mucho; tras desplazar 4
+    ; veces el valor de 16 bits, el byte alto queda en 0 porque ningún
+    ; mapa de este proyecto llega a 4096px de ancho -- el resultado
+    ; cabe entero en el byte bajo). Técnica estándar: LSR del byte alto
+    ; seguido de ROR del bajo, 4 veces, propaga el acarreo entre ambos
+    ; bytes como una sola división.
     lda col_x_hi
     sta col_tmp
     lda col_x_lo
@@ -751,6 +751,7 @@ mainloop:
     dec state_timer
     bne @still_dead
     jsr respawn_player
+    jmp @animate             ; refresca el OAM ya en la nueva habitación este mismo frame
 @still_dead:
     rts                      ; congelado: nada más corre mientras está muerto
 @not_dead:
@@ -1187,6 +1188,44 @@ mainloop:
     sta player_vy_hi
 
 @hazard_skip:
+    ; --- Puerta (F4.3): si alguna de las dos esquinas de abajo del
+    ; hitbox toca una celda de puerta, cambia de habitación. Solo 2
+    ; esquinas (no las 4 del chequeo de peligro) porque las puertas de
+    ; este milestone están pensadas para entrarse de frente, parado
+    ; sobre el piso -- no hace falta cubrir las esquinas de arriba.
+    ; No se revisa durante HURT/DEAD (igual que el peligro) para no
+    ; interrumpir esos estados con temporizador propio. Con solo 2
+    ; habitaciones, el destino es simplemente "la otra" (room_current
+    ; EOR 1) -- no hay todavía un mapa de puertas->destinos.
+    lda player_state
+    cmp #STATE_HURT
+    beq @door_skip
+    cmp #STATE_DEAD
+    beq @door_skip
+
+    lda #0
+    jsr set_col_x
+    lda player_y_hi
+    clc
+    adc #(PLAYER_HITBOX_H-1)
+    sta col_y
+    jsr get_tile_collision
+    cmp #COLLISION_DOOR
+    beq @door_hit
+
+    lda #(PLAYER_HITBOX_W-1)
+    jsr set_col_x
+    jsr get_tile_collision   ; col_y sigue siendo el borde inferior
+    cmp #COLLISION_DOOR
+    bne @door_skip
+
+@door_hit:
+    lda room_current
+    eor #1
+    jsr load_room
+    jmp @animate
+@door_skip:
+
     ; --- Muerte por caída (F3.4): si Y pasa el umbral y no está ya en
     ; DEAD, congela a Chiquito hasta que expire el temporizador --
     ; respawn_player lo reaparece (ver el chequeo de STATE_DEAD al
@@ -1285,26 +1324,15 @@ mainloop:
     rts
 .endproc
 
-; Reaparece a Chiquito en (SPAWN_X, SPAWN_Y), limpio de velocidad, y
-; vuelve a STATE_IDLE. Usado al expirar STATE_DEAD.
+; Reaparece a Chiquito en el punto de aparición de la habitación ACTUAL
+; (no siempre la pradera -- F4.3), limpio de velocidad, y vuelve a
+; STATE_IDLE. Usado al expirar STATE_DEAD. Recargar toda la habitación
+; (en vez de solo reposicionar) es más trabajo del necesario para este
+; caso, pero reutiliza `load_room` entero sin duplicar su lógica -- y
+; como solo pasa tras DEAD_DURATION frames, el costo extra no importa.
 .proc respawn_player
-    lda #<SPAWN_X
-    sta player_x_px_lo
-    lda #>SPAWN_X
-    sta player_x_px_hi
-    lda #SPAWN_Y
-    sta player_y_hi
-    lda #0
-    sta player_x_frac
-    sta player_y_lo
-    sta player_vx_lo
-    sta player_vx_hi
-    sta player_vy_lo
-    sta player_vy_hi
-    lda #STATE_IDLE
-    sta player_state
-    lda #1
-    sta player_on_ground
+    lda room_current
+    jsr load_room
     rts
 .endproc
 
@@ -1336,10 +1364,151 @@ mainloop:
     rts
 .endproc
 
+; Cambia de habitación (F4.3): A = ROOM_PRADERA/ROOM_CASA. Usado por
+; `reset` (habitación inicial), por el chequeo de puertas en
+; update_player, y por respawn_player (recarga la habitación actual).
+; Hace todo lo que antes hacía `reset` directamente para una sola
+; escena fija: lee el descriptor de la habitación (room_descriptors),
+; apaga el renderizado, recarga el/los nametable(s) físicos completos
+; de una sola vez (no por la cola de VBlank -- esto es un cambio
+; discreto, no scroll cuadro a cuadro; un parpadeo de un frame es
+; normal y esperado en una transición de habitación, igual que en
+; cualquier juego de NES de la época), reposiciona a Chiquito en el
+; punto de aparición de la nueva habitación, reinicia la cámara y
+; cualquier streaming en curso, y vuelve a encender el renderizado.
+.proc load_room
+    sta room_current
+
+    ; X = room_id * ROOM_DESC_SIZE. Con solo 2 habitaciones (ver nota de
+    ; ROOM_DESC_SIZE arriba) alcanza con una rama en vez de multiplicar
+    ; de verdad. Se vuelve a leer room_current (STA no toca las
+    ; banderas, así que no se puede ramificar directo sobre el valor
+    ; que se acaba de guardar).
+    lda room_current
+    bne @desc_room1
+    ldx #0
+    jmp @desc_ready
+@desc_room1:
+    ldx #ROOM_DESC_SIZE
+@desc_ready:
+
+    lda room_descriptors+0,x
+    sta room_collision_lo
+    lda room_descriptors+1,x
+    sta room_collision_hi
+    lda room_descriptors+2,x
+    sta room_row_lo_ptr
+    lda room_descriptors+3,x
+    sta room_row_lo_ptr+1
+    lda room_descriptors+4,x
+    sta room_row_hi_ptr
+    lda room_descriptors+5,x
+    sta room_row_hi_ptr+1
+    lda room_descriptors+6,x
+    sta room_screen_ptrs
+    lda room_descriptors+7,x
+    sta room_screen_ptrs+1
+    lda room_descriptors+8,x
+    sta room_screens
+    lda room_descriptors+9,x
+    sta room_max_camera_lo
+    lda room_descriptors+10,x
+    sta room_max_camera_hi
+
+    ; Reposiciona a Chiquito en el punto de aparición de la habitación.
+    lda room_descriptors+11,x
+    sta player_x_px_lo
+    lda room_descriptors+12,x
+    sta player_x_px_hi
+    lda room_descriptors+13,x
+    sta player_y_hi
+    lda #0
+    sta player_x_frac
+    sta player_y_lo
+    sta player_vx_lo
+    sta player_vx_hi
+    sta player_vy_lo
+    sta player_vy_hi
+    sta camera_x_lo
+    sta camera_x_hi
+    sta state_timer
+    sta stream_active        ; cancela cualquier streaming en curso de la habitación anterior
+    lda #1
+    sta player_on_ground
+    sta player_facing_right
+    lda #STATE_IDLE
+    sta player_state
+
+    ; Apaga el renderizado mientras se recarga VRAM -- un cambio de
+    ; habitación es un corte discreto, no algo que tenga que repartirse
+    ; en VBlanks sucesivos como el streaming de F4.2.
+    lda #$00
+    sta $2001
+
+    bit $2002
+    lda #$20
+    sta $2006
+    lda #$00
+    sta $2006
+    ldy #$00
+    lda (room_screen_ptrs),y
+    sta pbulk_src
+    iny
+    lda (room_screen_ptrs),y
+    sta pbulk_src+1
+    lda #<1024
+    sta pbulk_len
+    lda #>1024
+    sta pbulk_len+1
+    jsr ppu_copy_bulk
+    lda #0
+    sta nt_slot_screens+0
+
+    ; Si la habitación tiene una segunda pantalla, se precarga también
+    ; (igual que hacía `reset` para el nivel inicial) -- si no, el otro
+    ; nametable físico queda con lo que haya quedado de la habitación
+    ; anterior, pero nunca se vuelve visible: con una sola pantalla la
+    ; cámara queda siempre en 0 (room_max_camera=0), así que PPUSCROLL
+    ; nunca revela el nametable contiguo.
+    lda room_screens
+    cmp #2
+    bcc @skip_screen1
+    bit $2002
+    lda #$24
+    sta $2006
+    lda #$00
+    sta $2006
+    ldy #2
+    lda (room_screen_ptrs),y
+    sta pbulk_src
+    iny
+    lda (room_screen_ptrs),y
+    sta pbulk_src+1
+    lda #<1024
+    sta pbulk_len
+    lda #>1024
+    sta pbulk_len+1
+    jsr ppu_copy_bulk
+    lda #1
+    sta nt_slot_screens+1
+@skip_screen1:
+
+    bit $2002
+    lda #$00
+    sta $2005
+    sta $2005
+    lda #PPUCTRL_BASE        ; camera_x_hi ya es 0 aquí, no hace falta ajustar el bit de nametable
+    sta $2000
+    lda #%00011110           ; PPUMASK: fondo+sprites, incluyendo los 8px izquierdos
+    sta $2001
+
+    rts
+.endproc
+
 ; Cámara horizontal + streaming de pantallas (F4.2). Llamada una vez por
 ; frame desde el main loop, después de update_player. Dos trabajos:
 ;   1) Recalcula camera_x (entera, sin suavizado) = clamp(player_x_px -
-;      CAMERA_OFFSET, 0, MAX_CAMERA_X). nmi la usa para PPUSCROLL y el
+;      CAMERA_OFFSET, 0, room_max_camera). nmi la usa para PPUSCROLL y el
 ;      bit de nametable de PPUCTRL.
 ;   2) Si la pantalla lógica que debería verse (la actual o la
 ;      siguiente, según hacia dónde mira la cámara) no es la que ya está
@@ -1371,20 +1540,20 @@ mainloop:
     sta camera_x_hi
     jmp @after_clamp
 @clamp_high_check:
-    ; clamp superior: si camera_x > MAX_CAMERA_X, camera_x = MAX_CAMERA_X.
+    ; clamp superior: si camera_x > room_max_camera, camera_x = room_max_camera.
     lda camera_x_lo
     sta cmp_a_lo
     lda camera_x_hi
     sta cmp_a_hi
-    lda #<MAX_CAMERA_X
+    lda room_max_camera_lo
     sta cmp_b_lo
-    lda #>MAX_CAMERA_X
+    lda room_max_camera_hi
     sta cmp_b_hi
-    jsr cmp16_signed         ; N=1 si camera_x < MAX_CAMERA_X
+    jsr cmp16_signed         ; N=1 si camera_x < room_max_camera
     bmi @after_clamp
-    lda #<MAX_CAMERA_X
+    lda room_max_camera_lo
     sta camera_x_lo
-    lda #>MAX_CAMERA_X
+    lda room_max_camera_hi
     sta camera_x_hi
 @after_clamp:
 
@@ -1409,13 +1578,16 @@ mainloop:
 
 @check_next:
     ; ¿La pantalla siguiente está en el slot que le toca? (recortada al
-    ; final del nivel -- no hay pantalla LEVEL_SCREENS que transmitir).
+    ; final de la habitación actual -- no hay pantalla room_screens que
+    ; transmitir).
     lda cam_scratch
     clc
     adc #1
-    cmp #LEVEL_SCREENS
+    cmp room_screens
     bcc @next_in_range
-    lda #(LEVEL_SCREENS-1)
+    lda room_screens
+    sec
+    sbc #1
 @next_in_range:
     sta cam_scratch
     and #1
@@ -1483,13 +1655,17 @@ mainloop:
 ; Arranca una transmisión de la pantalla lógica stream_screen hacia el
 ; nametable físico stream_slot (0=$2000, 1=$2400). Llamado solo desde
 ; update_camera_and_streaming, nunca cuando stream_active ya está en 1.
+; F4.3: room_screen_ptrs (cargado por load_room) apunta a la tabla de
+; punteros de pantalla de la habitación actual -- ya no hay un único
+; scene_pradera_screen_ptrs fijo de compilación.
 .proc start_stream
     lda stream_screen
-    asl a                     ; *2: cada entrada de scene_pradera_screen_ptrs son 2 bytes
-    tax
-    lda scene_pradera_screen_ptrs,x
+    asl a                     ; *2: cada entrada de la tabla de punteros son 2 bytes
+    tay
+    lda (room_screen_ptrs),y
     sta stream_src_lo
-    lda scene_pradera_screen_ptrs+1,x
+    iny
+    lda (room_screen_ptrs),y
     sta stream_src_hi
 
     lda #<1024

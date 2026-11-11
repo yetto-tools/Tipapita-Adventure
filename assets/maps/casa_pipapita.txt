@@ -1,0 +1,28 @@
+# Casa Pipapita (F4.3): habitacion fija de prueba, una sola pantalla
+# (16x15 metatiles, sin scroll -- LEVEL_SCREENS=1 hace que la camara
+# quede siempre en 0, ver update_camera_and_streaming en src/main.s).
+# Alcanzable por la puerta de assets/maps/pradera.txt (pantalla 2,
+# columna 46, fila 9); la puerta de esta habitacion (columna 15, fila 9)
+# vuelve a pradera. Con solo 2 habitaciones en este milestone, el
+# destino de cada puerta esta hardcodeado en load_room (src/main.s), no
+# en el mapa.
+.=INDOOR
+W=WALL
+D=DOOR
+S=INDOOR
+
+WWWWWWWWWWWWWWWW
+W..............W
+W..............W
+W..............W
+W..............W
+W..............W
+W..............W
+W..............W
+W..............W
+W............S.D
+WWWWWWWWWWWWWWWW
+WWWWWWWWWWWWWWWW
+WWWWWWWWWWWWWWWW
+WWWWWWWWWWWWWWWW
+WWWWWWWWWWWWWWWW

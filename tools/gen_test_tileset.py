@@ -11,6 +11,7 @@ Tiles generados, en este orden (cada uno ocupa una columna de 8px):
   2: suelo con borde de pasto (superficie)
   3: relleno de tierra (bajo la superficie)
   4: plataforma flotante
+  5: puerta (marco + picaporte -- F4.3, transición a habitación fija)
 
 Este script es una herramienta de un solo uso para producir el asset de
 prueba; el pipeline real (png2chr.py) no depende de él -- consume
@@ -20,7 +21,7 @@ cualquier PNG con tiles de 8x8 y <=4 colores por tile.
 from PIL import Image
 
 TILE = 8
-NUM_TILES = 5
+NUM_TILES = 6
 
 # Tonos en escala de grises; png2chr.py los ordena por valor ascendente al
 # asignar índices 0-3, así que el orden aquí es solo para legibilidad.
@@ -81,7 +82,18 @@ TILE_PLATFORM = [
     [BLACK] * 8,
 ]
 
-TILES = [TILE_BLANK, TILE_CLOUD, TILE_GROUND_TOP, TILE_GROUND_FILL, TILE_PLATFORM]
+TILE_DOOR = [
+    [MID] * 8,
+    [MID, DARK, DARK, DARK, DARK, DARK, DARK, MID],
+    [MID, DARK, DARK, DARK, DARK, DARK, DARK, MID],
+    [MID, DARK, DARK, DARK, DARK, DARK, DARK, MID],
+    [MID, DARK, DARK, DARK, WHITE, DARK, DARK, MID],
+    [MID, DARK, DARK, DARK, DARK, DARK, DARK, MID],
+    [MID, DARK, DARK, DARK, DARK, DARK, DARK, MID],
+    [MID] * 8,
+]
+
+TILES = [TILE_BLANK, TILE_CLOUD, TILE_GROUND_TOP, TILE_GROUND_FILL, TILE_PLATFORM, TILE_DOOR]
 
 
 def main():

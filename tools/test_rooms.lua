@@ -79,11 +79,15 @@ local room_after_door1 = memory.readbyte(ROOM_CURRENT)
 local x_in_casa, y_in_casa = x16(), memory.readbyte(Y_HI)
 local cam_in_casa = camera16()
 local nametable_tile_casa = ppu.readbyte(0x2000) -- fila0,col0: WALL (techo) = T_GROUND_FILL = 3 en la casa
+-- F4.4: casa_pipapita.txt se rediseñó con un interruptor/puerta
+-- bloqueada que divide la habitación; el spawn quedó en la zona
+-- izquierda (columna 3 = mundo x=48), no columna 13 (x=208) como en
+-- el diseño de F4.3.
 log(string.format(
-	"puerta_pradera_a_casa: room=%d x=%d y=%d camera=%d tile(0,0)=%d (esperado room=1 x=208 y=152 camera=0 tile=3)",
+	"puerta_pradera_a_casa: room=%d x=%d y=%d camera=%d tile(0,0)=%d (esperado room=1 x=48 y=152 camera=0 tile=3)",
 	room_after_door1, x_in_casa, y_in_casa, cam_in_casa, nametable_tile_casa
 ))
-local door1_ok = room_after_door1 == ROOM_CASA and x_in_casa == 208 and y_in_casa == 152
+local door1_ok = room_after_door1 == ROOM_CASA and x_in_casa == 48 and y_in_casa == 152
 	and cam_in_casa == 0 and nametable_tile_casa == 3
 
 -- 2) Habitación fija: camina de verdad dentro de la casa y confirma

@@ -98,13 +98,22 @@
 .include "../dist/scene_casa.s"
 .include "../dist/tiles_sprites.s"
 
-; Índices de tile de sprite (dentro de tiles_sprites, offset +6 porque
-; van después de los 6 tiles de fondo en el mismo CHR-ROM -- 5 de la
-; pradera + la puerta agregada en F4.3).
-TILE_CHIQUITO_IDLE = 6
-TILE_CHIQUITO_WALK = 7
-TILE_ENEMY         = 8
-TILE_ITEM          = 9
+; Índices de tile de sprite (dentro de tiles_sprites, offset +8 porque
+; van después de los 8 tiles de fondo en el mismo CHR-ROM -- 5 de la
+; pradera + puerta (F4.3) + punto de control + interruptor (F4.4)).
+TILE_CHIQUITO_IDLE = 8
+TILE_CHIQUITO_WALK = 9
+TILE_ENEMY         = 10
+TILE_ITEM          = 11
+
+; F4.4: la plataforma móvil reutiliza el tile de fondo T_PLATFORM (índice
+; 4 en tiles_pradera, el 5to tile del tileset) como sprite. Funciona
+; porque hoy los 6 registros de banco de CHR de MMC3 (R0-R5) apuntan
+; todos al mismo banco físico 0 (ver mmc3_init_values) -- pattern table
+; 0 (fondo) y pattern table 1 (sprites) muestran los mismos bytes de
+; CHR-ROM, así que el índice 4 es válido tanto de fondo como de sprite
+; sin necesitar un tile nuevo.
+TILE_PLATFORM_SPRITE = 4
 
 ; Hitbox del jugador (definida en F2.3, usada desde F3.3). Un sprite de
 ; 8x8 completo, sin margen todavía.
@@ -130,6 +139,9 @@ COLLISION_SOLID    = 1
 COLLISION_PLATFORM = 2
 COLLISION_HAZARD   = 3
 COLLISION_DOOR     = 4
+COLLISION_CHECKPOINT = 5
+COLLISION_SWITCH     = 6
+COLLISION_LOCKED_DOOR = 7
 
 ; Estados del jugador (F3.4). IDLE/WALK/JUMP/FALL se recalculan cada
 ; frame a partir de la física (on_ground, vx, vy) cuando no hay un
@@ -184,6 +196,38 @@ ROOM_CASA      = 1
 ; máxima) + 2 (spawn X) + 1 (spawn Y) = 14.
 ROOM_DESC_SIZE = 14
 
+; F4.4 (elementos de escenario).
+;
+; Plataforma móvil: un solo ejemplo hardcodeado (no un sistema general
+; de N plataformas -- eso es trabajo de F5.1, el sistema de entidades).
+; Vive solo en pradera, oscila horizontalmente entre PLATFORM_MIN_X y
+; PLATFORM_MAX_X a PLATFORM_Y fijo, 1px/frame. Ver update_platform.
+PLATFORM_Y     = 80
+PLATFORM_MIN_X = 280
+PLATFORM_MAX_X = 340
+PLATFORM_WIDTH = 16     ; 2 sprites de 8px uno al lado del otro
+PLATFORM_SPEED = 1
+; Tolerancia de aterrizaje (en píxeles): si el pie de Chiquito cae
+; dentro de [PLATFORM_Y, PLATFORM_Y+4] este frame (en vez de exigir una
+; igualdad exacta), cuenta como aterrizaje -- a MAX_FALL_SPEED (4px/
+; frame) el pie puede "saltarse" el píxel exacto de la plataforma en
+; un solo frame si se exigiera igualdad estricta.
+PLATFORM_LANDING_TOLERANCE = 4
+
+; Interruptor + puerta bloqueada: un solo par hardcodeado (switch_casa_open
+; es la única bandera), viven en la Casa Pipapita. Al tocar el
+; interruptor, además de abrir la puerta bloqueada (ver
+; COLLISION_LOCKED_DOOR en get_tile_collision), se transmite un cambio
+; visual real a VRAM (el interruptor pasa a verse "presionado") en las
+; direcciones de nametable fijas de abajo -- conocidas en tiempo de
+; compilación porque hay un solo interruptor en un mapa de 1 sola
+; pantalla, siempre cargada en el nametable físico $2000.
+SWITCH_NT_TL = $224C
+SWITCH_NT_TR = $224D
+SWITCH_NT_BL = $226C
+SWITCH_NT_BR = $226D
+TILE_SWITCH_PRESSED = 3   ; T_GROUND_FILL de tiles_pradera (ver tools/map2scene.py)
+
 ; Presupuesto de bytes transmitidos por frame hacia el nametable físico
 ; que está fuera de vista (streaming de pantallas, ver
 ; update_camera_and_streaming). 16 bytes/frame tarda 1024/16=64 frames
@@ -218,6 +262,10 @@ oam_init_data:
     .byte SCENE_PRADERA_SPAWN_Y, TILE_CHIQUITO_IDLE, %00000000, SCENE_PRADERA_SPAWN_X
     .byte 179,     TILE_ENEMY,         %00000001, 180       ; enemigo
     .byte 99,      TILE_ITEM,          %00000010, 140       ; coleccionable
+    ; Plataforma móvil (F4.4): 2 sprites de 8px uno al lado del otro.
+    ; Posición real la escribe update_platform desde el primer frame.
+    .byte PLATFORM_Y, TILE_PLATFORM_SPRITE, %00000000, 0    ; mitad izquierda
+    .byte PLATFORM_Y, TILE_PLATFORM_SPRITE, %00000000, 8    ; mitad derecha
 
 ; Descriptor de cada habitación (F4.3): un registro de ROOM_DESC_SIZE
 ; bytes por habitación, indexado por ROOM_PRADERA/ROOM_CASA*ROOM_DESC_SIZE
@@ -355,6 +403,30 @@ room_screens:      .res 1   ; cantidad de pantallas de la habitación actual (an
 room_max_camera_lo: .res 1  ; cámara máxima de la habitación actual (antes MAX_CAMERA_X)
 room_max_camera_hi: .res 1
 
+; Punto de control (F4.4): si checkpoint_active=1 y checkpoint_room
+; coincide con la habitación que se está cargando, load_room reaparece
+; ahí en vez del punto de aparición por defecto de la habitación. Un
+; solo "slot" de checkpoint (no uno por habitación simultáneamente) --
+; alcanza con este milestone, ver TASKS.md F4.4.
+checkpoint_active: .res 1
+checkpoint_room:   .res 1
+checkpoint_x_lo:   .res 1
+checkpoint_x_hi:   .res 1
+checkpoint_y:      .res 1
+
+; Interruptor de la Casa Pipapita (F4.4): 0=bloqueado, 1=abierto. Un
+; solo interruptor en todo el juego por ahora -- RAM lo deja en 0 al
+; encender, y se queda en 1 el resto de la partida una vez activado
+; (no se vuelve a bloquear al salir/volver a entrar a la habitación).
+switch_casa_open: .res 1
+
+; Plataforma móvil de pradera (F4.4): posición de mundo (16 bits,
+; mismo formato que player_x_px) y dirección actual (0=derecha,
+; distinto de 0=izquierda). Ver update_platform.
+platform_x_lo: .res 1
+platform_x_hi: .res 1
+platform_dir:  .res 1
+
 .segment "BSS"
 ppu_queue_len:       .res 1
 ppu_queue_overflow:  .res 1                      ; contador de escrituras descartadas por cola llena
@@ -475,14 +547,14 @@ oam_buffer: .res 256  ; página $0200-$02FF, fuente de la OAM DMA ($4014)
     inx
     bne @oam_fill
 
-    ; Copia los 3 sprites de prueba (Chiquito, enemigo, coleccionable)
-    ; al principio del buffer de OAM.
+    ; Copia los 5 sprites de prueba (Chiquito, enemigo, coleccionable,
+    ; plataforma móvil x2 -- F4.4) al principio del buffer de OAM.
     ldx #$00
 @oam_copy:
     lda oam_init_data,x
     sta oam_buffer,x
     inx
-    cpx #12
+    cpx #20
     bne @oam_copy
 
     ; Re-cero defensivo de posición fraccional y velocidad: ya deberían
@@ -525,6 +597,18 @@ oam_buffer: .res 256  ; página $0200-$02FF, fuente de la OAM DMA ($4014)
     cpx #32
     bne @copypalette
 
+    ; F4.4: posición/dirección inicial de la plataforma móvil. No
+    ; alcanza con la limpieza de RAM (dejaría platform_x en 0, fuera de
+    ; [PLATFORM_MIN_X, PLATFORM_MAX_X], visible en el lugar equivocado
+    ; hasta que el bucle de movimiento la arrastrara de vuelta al rango
+    ; -- se deja explícito para que arranque ya dentro del rango.
+    lda #<PLATFORM_MIN_X
+    sta platform_x_lo
+    lda #>PLATFORM_MIN_X
+    sta platform_x_hi
+    lda #0
+    sta platform_dir         ; arranca moviéndose a la derecha
+
     ; F4.3: load_room hace todo lo que antes hacía `reset` directamente
     ; (cargar nametable(s), reiniciar cámara/streaming, posicionar a
     ; Chiquito) -- ahora generalizado para poder repetirse cada vez que
@@ -543,6 +627,7 @@ mainloop:
     jsr read_controller1     ; F3.1: actualiza pad1/pad1_prev/pad1_pressed
     jsr update_player        ; F3.2: física + escribe posición/tile/flip al OAM
     jsr update_camera_and_streaming ; F4.2: cámara + streaming de pantallas
+    jsr update_platform      ; F4.4: mueve la plataforma y escribe su OAM
 
     jmp mainloop
 .endproc
@@ -705,6 +790,21 @@ mainloop:
 
     ldy #$00
     lda (col_ptr_lo),y
+
+    ; F4.4: una puerta bloqueada no es un tipo de colisión fijo -- su
+    ; valor efectivo depende de switch_casa_open. El dato en ROM siempre
+    ; dice COLLISION_LOCKED_DOOR; aquí se traduce a SOLID o EMPTY según
+    ; el interruptor. Único par interruptor/puerta en este milestone,
+    ; así que una sola bandera alcanza (no una tabla de N interruptores).
+    cmp #COLLISION_LOCKED_DOOR
+    bne @not_locked
+    lda switch_casa_open
+    bne @door_open
+    lda #COLLISION_SOLID
+    rts
+@door_open:
+    lda #COLLISION_EMPTY
+@not_locked:
     rts
 .endproc
 
@@ -1124,6 +1224,113 @@ mainloop:
     sta player_vy_hi
 
 @vcol_done:
+    ; --- Plataforma móvil (F4.4): un solo ejemplo hardcodeado, solo en
+    ; pradera. No bloquea desde abajo como un tile normal -- es un
+    ; sprite, así que esto corre SIEMPRE después de la colisión de
+    ; tiles de arriba (que ya habrá puesto on_ground=0 si no hay nada
+    ; debajo en el tilemap) y la puede sobrescribir si corresponde.
+    ; bne/bmi de acá a @platform_done no entran en el rango de un
+    ; branch relativo (el bloque es largo) -- se arma el salto en 2
+    ; pasos (branch corto + jmp, que no tiene límite de rango).
+    lda room_current
+    cmp #ROOM_PRADERA
+    beq @platform_room_ok
+    jmp @platform_done
+@platform_room_ok:
+    lda player_vy_hi
+    bpl @platform_landing_check
+    jmp @platform_done       ; subiendo: no se puede "aterrizar" en la plataforma
+@platform_landing_check:
+
+    ; Tolerancia de aterrizaje: foot_y - PLATFORM_Y debe estar en
+    ; [0, PLATFORM_LANDING_TOLERANCE] -- ver la constante para el por qué.
+    lda player_y_hi
+    clc
+    adc #PLAYER_HITBOX_H
+    sec
+    sbc #PLATFORM_Y
+    bpl @platform_tolerance_check
+    jmp @platform_done       ; negativo: el pie todavía está arriba de la plataforma
+@platform_tolerance_check:
+    cmp #(PLATFORM_LANDING_TOLERANCE + 1)
+    bcs @platform_done       ; muy por debajo: no es un aterrizaje válido
+
+    ; Solape horizontal: [player_x, player_x+7] vs [platform_x, platform_x+15].
+    ; player_right/platform_right en col_x_lo/hi y col_ptr_lo/hi --
+    ; escratch libre aquí, get_tile_collision no corre en este chequeo.
+    clc
+    lda player_x_px_lo
+    adc #(PLAYER_HITBOX_W-1)
+    sta col_x_lo
+    lda player_x_px_hi
+    adc #0
+    sta col_x_hi
+    clc
+    lda platform_x_lo
+    adc #(PLATFORM_WIDTH-1)
+    sta col_ptr_lo
+    lda platform_x_hi
+    adc #0
+    sta col_ptr_hi
+
+    ; ¿platform_right >= player_left?
+    lda col_ptr_lo
+    sta cmp_a_lo
+    lda col_ptr_hi
+    sta cmp_a_hi
+    lda player_x_px_lo
+    sta cmp_b_lo
+    lda player_x_px_hi
+    sta cmp_b_hi
+    jsr cmp16_signed         ; N=1 si platform_right < player_left
+    bmi @platform_done
+
+    ; ¿player_right >= platform_left?
+    lda col_x_lo
+    sta cmp_a_lo
+    lda col_x_hi
+    sta cmp_a_hi
+    lda platform_x_lo
+    sta cmp_b_lo
+    lda platform_x_hi
+    sta cmp_b_hi
+    jsr cmp16_signed         ; N=1 si player_right < platform_left
+    bmi @platform_done
+
+    ; Aterriza/viaja: encaja a Chiquito exactamente sobre la plataforma.
+    lda #PLATFORM_Y
+    sec
+    sbc #PLAYER_HITBOX_H
+    sta player_y_hi
+    lda #0
+    sta player_y_lo
+    sta player_vy_lo
+    sta player_vy_hi
+    lda #1
+    sta player_on_ground
+
+    ; Lo arrastra con el movimiento de este frame de la plataforma
+    ; (ver update_platform -- misma dirección, mismo PLATFORM_SPEED).
+    lda platform_dir
+    bne @platform_carry_left
+    clc
+    lda player_x_px_lo
+    adc #PLATFORM_SPEED
+    sta player_x_px_lo
+    lda player_x_px_hi
+    adc #0
+    sta player_x_px_hi
+    jmp @platform_done
+@platform_carry_left:
+    sec
+    lda player_x_px_lo
+    sbc #PLATFORM_SPEED
+    sta player_x_px_lo
+    lda player_x_px_hi
+    sbc #0
+    sta player_x_px_hi
+@platform_done:
+
     ; --- Peligro (F3.4): si no está ya en HURT/DEAD, revisa las 4
     ; esquinas del hitbox. No bloquea el movimiento; si toca, entra en
     ; HURT con knockback -- placeholder de "daño" hasta que exista un
@@ -1225,6 +1432,100 @@ mainloop:
     jsr load_room
     jmp @animate
 @door_skip:
+
+    ; --- Interruptor (F4.4): mismo chequeo de 2 esquinas que puerta.
+    ; Solo importa la primera vez (switch_casa_open pasa de 0 a 1);
+    ; después de eso, queda abierto el resto de la partida -- no hace
+    ; falta seguir revisando cada frame una vez activado.
+    lda switch_casa_open
+    bne @switch_skip
+
+    lda #0
+    jsr set_col_x
+    lda player_y_hi
+    clc
+    adc #(PLAYER_HITBOX_H-1)
+    sta col_y
+    jsr get_tile_collision
+    cmp #COLLISION_SWITCH
+    beq @switch_hit
+
+    lda #(PLAYER_HITBOX_W-1)
+    jsr set_col_x
+    jsr get_tile_collision   ; col_y sigue siendo el borde inferior
+    cmp #COLLISION_SWITCH
+    bne @switch_skip
+
+@switch_hit:
+    lda #1
+    sta switch_casa_open
+    ; Cambia el interruptor a su apariencia "presionado" en VRAM de
+    ; verdad (4 tiles, 1 solo interruptor en el juego así que las
+    ; direcciones son constantes de compilación -- ver nota de
+    ; SWITCH_NT_* arriba del archivo). Vía la cola de F1.3: esto corre
+    ; fuera de VBlank.
+    lda #>SWITCH_NT_TL
+    sta pq_addr_hi
+    lda #<SWITCH_NT_TL
+    sta pq_addr_lo
+    lda #TILE_SWITCH_PRESSED
+    sta pq_data
+    jsr ppu_queue_push
+    lda #>SWITCH_NT_TR
+    sta pq_addr_hi
+    lda #<SWITCH_NT_TR
+    sta pq_addr_lo
+    lda #TILE_SWITCH_PRESSED
+    sta pq_data
+    jsr ppu_queue_push
+    lda #>SWITCH_NT_BL
+    sta pq_addr_hi
+    lda #<SWITCH_NT_BL
+    sta pq_addr_lo
+    lda #TILE_SWITCH_PRESSED
+    sta pq_data
+    jsr ppu_queue_push
+    lda #>SWITCH_NT_BR
+    sta pq_addr_hi
+    lda #<SWITCH_NT_BR
+    sta pq_addr_lo
+    lda #TILE_SWITCH_PRESSED
+    sta pq_data
+    jsr ppu_queue_push
+@switch_skip:
+
+    ; --- Punto de control (F4.4): mismo chequeo de 2 esquinas. Guarda
+    ; la posición y la habitación actual -- load_room reaparece ahí en
+    ; vez del punto de aparición por defecto mientras coincida la
+    ; habitación (ver load_room).
+    lda #0
+    jsr set_col_x
+    lda player_y_hi
+    clc
+    adc #(PLAYER_HITBOX_H-1)
+    sta col_y
+    jsr get_tile_collision
+    cmp #COLLISION_CHECKPOINT
+    beq @checkpoint_hit
+
+    lda #(PLAYER_HITBOX_W-1)
+    jsr set_col_x
+    jsr get_tile_collision
+    cmp #COLLISION_CHECKPOINT
+    bne @checkpoint_skip
+
+@checkpoint_hit:
+    lda #1
+    sta checkpoint_active
+    lda room_current
+    sta checkpoint_room
+    lda player_x_px_lo
+    sta checkpoint_x_lo
+    lda player_x_px_hi
+    sta checkpoint_x_hi
+    lda player_y_hi
+    sta checkpoint_y
+@checkpoint_skip:
 
     ; --- Muerte por caída (F3.4): si Y pasa el umbral y no está ya en
     ; DEAD, congela a Chiquito hasta que expire el temporizador --
@@ -1415,13 +1716,27 @@ mainloop:
     lda room_descriptors+10,x
     sta room_max_camera_hi
 
-    ; Reposiciona a Chiquito en el punto de aparición de la habitación.
+    ; Reposiciona a Chiquito en el punto de aparición de la habitación
+    ; -- o en el punto de control (F4.4), si hay uno activo para ESTA
+    ; habitación (room_current ya tiene el ID que se está cargando).
     lda room_descriptors+11,x
     sta player_x_px_lo
     lda room_descriptors+12,x
     sta player_x_px_hi
     lda room_descriptors+13,x
     sta player_y_hi
+    lda checkpoint_active
+    beq @no_checkpoint
+    lda checkpoint_room
+    cmp room_current
+    bne @no_checkpoint
+    lda checkpoint_x_lo
+    sta player_x_px_lo
+    lda checkpoint_x_hi
+    sta player_x_px_hi
+    lda checkpoint_y
+    sta player_y_hi
+@no_checkpoint:
     lda #0
     sta player_x_frac
     sta player_y_lo
@@ -1649,6 +1964,77 @@ mainloop:
     sta nt_slot_screens,x
     lda #0
     sta stream_active
+    rts
+.endproc
+
+; Mueve la plataforma móvil (F4.4, un solo ejemplo hardcodeado -- ver
+; nota de PLATFORM_* arriba del archivo) y escribe sus 2 sprites al
+; OAM. Llamada una vez por frame desde el main loop. Cuando la
+; habitación actual no es pradera, la plataforma no existe ahí --
+; se oculta (Y=$FF) en vez de dejarla en una posición de pantalla que
+; no le corresponde.
+.proc update_platform
+    lda platform_dir
+    bne @move_left
+
+@move_right:
+    inc platform_x_lo
+    bne @check_max
+    inc platform_x_hi
+@check_max:
+    lda platform_x_lo
+    sta cmp_a_lo
+    lda platform_x_hi
+    sta cmp_a_hi
+    lda #<PLATFORM_MAX_X
+    sta cmp_b_lo
+    lda #>PLATFORM_MAX_X
+    sta cmp_b_hi
+    jsr cmp16_signed          ; N=1 si platform_x < PLATFORM_MAX_X
+    bmi @oam_write
+    lda #1
+    sta platform_dir
+    jmp @oam_write
+
+@move_left:
+    lda platform_x_lo
+    bne @no_borrow
+    dec platform_x_hi
+@no_borrow:
+    dec platform_x_lo
+    lda platform_x_lo
+    sta cmp_a_lo
+    lda platform_x_hi
+    sta cmp_a_hi
+    lda #<PLATFORM_MIN_X
+    sta cmp_b_lo
+    lda #>PLATFORM_MIN_X
+    sta cmp_b_hi
+    jsr cmp16_signed          ; N=1 si platform_x < PLATFORM_MIN_X (se pasó)
+    bpl @oam_write
+    lda #0
+    sta platform_dir
+
+@oam_write:
+    lda room_current
+    cmp #ROOM_PRADERA
+    beq @visible
+    lda #$FF
+    sta oam_buffer+12         ; Y de ambos sprites: fuera de pantalla
+    sta oam_buffer+16
+    rts
+
+@visible:
+    lda #PLATFORM_Y
+    sta oam_buffer+12
+    sta oam_buffer+16
+    lda platform_x_lo
+    sec
+    sbc camera_x_lo           ; X relativa a pantalla (igual que @animate con el jugador)
+    sta oam_buffer+15
+    clc
+    adc #8
+    sta oam_buffer+19
     rts
 .endproc
 

@@ -12,6 +12,11 @@ Tiles generados, en este orden (cada uno ocupa una columna de 8px):
   3: relleno de tierra (bajo la superficie)
   4: plataforma flotante
   5: puerta (marco + picaporte -- F4.3, transición a habitación fija)
+  6: punto de control (bandera en un mástil -- F4.4)
+  7: interruptor (panel con botón -- F4.4; se reusa como segunda
+     apariencia, ya "presionado", es en realidad el tile 3 de relleno
+     de tierra, no uno nuevo -- ver update_player/get_tile_collision
+     en src/main.s)
 
 Este script es una herramienta de un solo uso para producir el asset de
 prueba; el pipeline real (png2chr.py) no depende de él -- consume
@@ -21,7 +26,7 @@ cualquier PNG con tiles de 8x8 y <=4 colores por tile.
 from PIL import Image
 
 TILE = 8
-NUM_TILES = 6
+NUM_TILES = 8
 
 # Tonos en escala de grises; png2chr.py los ordena por valor ascendente al
 # asignar índices 0-3, así que el orden aquí es solo para legibilidad.
@@ -93,7 +98,32 @@ TILE_DOOR = [
     [MID] * 8,
 ]
 
-TILES = [TILE_BLANK, TILE_CLOUD, TILE_GROUND_TOP, TILE_GROUND_FILL, TILE_PLATFORM, TILE_DOOR]
+TILE_CHECKPOINT = [
+    [DARK, DARK, WHITE, WHITE, WHITE, DARK, DARK, DARK],
+    [DARK, DARK, WHITE, MID, MID, DARK, DARK, DARK],
+    [DARK, DARK, WHITE, WHITE, WHITE, DARK, DARK, DARK],
+    [DARK, DARK, DARK, DARK, DARK, DARK, DARK, DARK],
+    [DARK, DARK, DARK, DARK, DARK, DARK, DARK, DARK],
+    [DARK, DARK, DARK, DARK, DARK, DARK, DARK, DARK],
+    [DARK, DARK, DARK, DARK, DARK, DARK, DARK, DARK],
+    [MID] * 8,
+]
+
+TILE_SWITCH = [
+    [MID] * 8,
+    [MID, DARK, DARK, DARK, DARK, DARK, DARK, MID],
+    [MID, DARK, WHITE, WHITE, WHITE, WHITE, DARK, MID],
+    [MID, DARK, WHITE, MID, MID, WHITE, DARK, MID],
+    [MID, DARK, WHITE, MID, MID, WHITE, DARK, MID],
+    [MID, DARK, WHITE, WHITE, WHITE, WHITE, DARK, MID],
+    [MID, DARK, DARK, DARK, DARK, DARK, DARK, MID],
+    [MID] * 8,
+]
+
+TILES = [
+    TILE_BLANK, TILE_CLOUD, TILE_GROUND_TOP, TILE_GROUND_FILL, TILE_PLATFORM, TILE_DOOR,
+    TILE_CHECKPOINT, TILE_SWITCH,
+]
 
 
 def main():

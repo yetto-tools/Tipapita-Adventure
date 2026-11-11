@@ -25,7 +25,8 @@ Formato del archivo de mapa:
     sobre la celda de abajo.
 
 Metatile = (tile_tl, tile_tr, tile_bl, tile_br, paleta, colisión).
-Colisión: 0=vacío, 1=sólido, 2=plataforma (un sentido), 3=peligro, 4=puerta.
+Colisión: 0=vacío, 1=sólido, 2=plataforma (un sentido), 3=peligro, 4=puerta,
+5=punto de control, 6=interruptor, 7=puerta bloqueada.
 
 F4.3 (puertas/habitaciones): una celda de colisión "puerta" no bloquea
 el movimiento (igual que peligro, el jugador puede pisarla) pero
@@ -54,7 +55,7 @@ hace falta.
 import argparse
 import sys
 
-T_BLANK, T_CLOUD, T_GROUND_TOP, T_GROUND_FILL, T_PLATFORM, T_DOOR = range(6)
+T_BLANK, T_CLOUD, T_GROUND_TOP, T_GROUND_FILL, T_PLATFORM, T_DOOR, T_CHECKPOINT, T_SWITCH = range(8)
 
 # Subpaletas de fondo (ver src/data/palettes.s): 0=cielo, 1=pradera,
 # 2=tierra, 3=peligro.
@@ -65,6 +66,9 @@ COLLISION_SOLID = 1
 COLLISION_PLATFORM = 2
 COLLISION_HAZARD = 3
 COLLISION_DOOR = 4
+COLLISION_CHECKPOINT = 5
+COLLISION_SWITCH = 6
+COLLISION_LOCKED_DOOR = 7
 
 METATILES = {
     "SKY": (T_BLANK, T_BLANK, T_BLANK, T_BLANK, PAL_SKY, COLLISION_EMPTY),
@@ -76,6 +80,16 @@ METATILES = {
     "WALL": (T_GROUND_FILL, T_GROUND_FILL, T_GROUND_FILL, T_GROUND_FILL, PAL_TIERRA, COLLISION_SOLID),
     "HAZARD": (T_GROUND_TOP, T_GROUND_TOP, T_GROUND_FILL, T_GROUND_FILL, PAL_PELIGRO, COLLISION_HAZARD),
     "DOOR": (T_DOOR, T_DOOR, T_DOOR, T_DOOR, PAL_TIERRA, COLLISION_DOOR),
+    "CHECKPOINT": (T_CHECKPOINT, T_CHECKPOINT, T_CHECKPOINT, T_CHECKPOINT, PAL_PRADERA, COLLISION_CHECKPOINT),
+    "SWITCH": (T_SWITCH, T_SWITCH, T_SWITCH, T_SWITCH, PAL_TIERRA, COLLISION_SWITCH),
+    # Reusa el tile visual de DOOR -- una puerta bloqueada se ve como una
+    # puerta normal; lo que cambia es que no se puede atravesar hasta
+    # activar el interruptor correspondiente (ver COLLISION_LOCKED_DOOR
+    # en get_tile_collision, src/main.s).
+    "LOCKED_DOOR": (T_DOOR, T_DOOR, T_DOOR, T_DOOR, PAL_TIERRA, COLLISION_LOCKED_DOOR),
+    # Mismos tiles y paleta que WALL -- se ve exactamente igual a una
+    # pared sólida, pero es atravesable. Esconde una zona secreta (F4.4).
+    "SECRET_WALL": (T_GROUND_FILL, T_GROUND_FILL, T_GROUND_FILL, T_GROUND_FILL, PAL_TIERRA, COLLISION_EMPTY),
 }
 
 SCREEN_COLS = 16   # ancho de una pantalla/nametable, en metatiles -- fijo, es hardware.
@@ -219,7 +233,8 @@ def emit_ca65(screens, collision_bytes, width, spawn_x, spawn_y, out_path, label
     lines += [
         f"; Mapa de colisión del nivel completo ({upper}_LEVEL_COLS x MT_ROWS),",
         f"; 1 byte por metatile; índice = fila*{upper}_LEVEL_COLS + columna.",
-        "; 0=vacío, 1=sólido, 2=plataforma (un sentido), 3=peligro, 4=puerta.",
+        "; 0=vacío, 1=sólido, 2=plataforma (un sentido), 3=peligro, 4=puerta,",
+        "; 5=punto de control, 6=interruptor, 7=puerta bloqueada.",
         f"{label}_collision:",
     ] + byte_rows(collision_bytes)
 

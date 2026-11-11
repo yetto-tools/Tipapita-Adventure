@@ -366,14 +366,32 @@
 - Limitaciones pendientes: solo 2 habitaciones, 1 puerta por mapa, destino de puerta hardcodeado como "la otra habitación" (ver arriba). La persistencia de objetos/enemigos está definida pero no implementada (no hay nada real que persistir todavía). El cambio de habitación causa un parpadeo de ~1 frame (renderizado apagado mientras se recarga VRAM) -- aceptable y esperado para esta técnica, no un bug. No probado en hardware real.
 
 ## F4.4 Elementos de escenario [P2]
-- [ ] Plataformas móviles.
-- [ ] Interruptores.
-- [ ] Puertas.
-- [ ] Obstáculos.
-- [ ] Zonas secretas.
-- [ ] Puntos de control.
+- [x] Plataformas móviles.
+- [x] Interruptores.
+- [x] Puertas.
+- [x] Obstáculos.
+- [x] Zonas secretas.
+- [x] Puntos de control.
 
 **Aceptación:** cada elemento tiene comportamiento y pruebas documentadas.
+
+**Registro de la tarea:**
+- Alcance decidido con el usuario antes de implementar: UN ejemplo real por mecánica (no un sistema general de N plataformas/interruptores -- eso es trabajo de F5.1, el sistema de entidades), para no construir algo que Fase 5 tendría que rehacer.
+- Archivos: `src/main.s` (toda la lógica nueva, ver abajo), `tools/map2scene.py` (metatiles `CHECKPOINT`/`SWITCH`/`LOCKED_DOOR`/`SECRET_WALL`, tipos de colisión 5/6/7), `tools/gen_test_tileset.py` (2 tiles nuevos: bandera de punto de control, panel de interruptor; 8 tiles en total), `assets/tiles/pradera.png` (regenerado), `assets/maps/pradera.txt` (agrega punto de control en pantalla 1 columna 20, y pared secreta en pantalla 2 columna 33), `assets/maps/casa_pipapita.txt` (rediseñada: interruptor + puerta bloqueada dividen la habitación), `tools/test_scenery.lua` (nuevo).
+- **Plataforma móvil**: un solo ejemplo hardcodeado (`platform_x_lo/hi`/`platform_dir`, proc `update_platform`), vive solo en pradera (zona abierta sin nada más, x=280-340, y=80), reutiliza el tile de fondo `T_PLATFORM` como sprite (ver nota de `TILE_PLATFORM_SPRITE` -- funciona porque los 6 registros de banco CHR de MMC3 siguen apuntando todos al mismo banco físico, pattern table 0 y 1 muestran los mismos bytes). `update_player` tiene un chequeo de aterrizaje/arrastre con tolerancia de 4px (`PLATFORM_LANDING_TOLERANCE`, igual al entero de `MAX_FALL_SPEED`) en vez de exigir que el pie caiga en el píxel EXACTO de la plataforma -- a velocidad de caída máxima, un chequeo de igualdad estricta deja pasar al jugador de largo un frame de cada varios.
+- **Interruptor + puerta bloqueada**: un solo par hardcodeado (`switch_casa_open`), viven en la Casa Pipapita, que se rediseñó para que la puerta bloqueada (columna 10) sea el ÚNICO camino hacia la puerta de salida (columna 15) -- sin activar el interruptor (columna 6) no se puede salir. `COLLISION_LOCKED_DOOR` no es un valor de colisión fijo: `get_tile_collision` lo traduce a SOLID o EMPTY según `switch_casa_open` en tiempo de ejecución, porque el mapa de colisión en ROM no puede cambiar. Activar el interruptor también transmite un cambio visual real a VRAM (4 `ppu_queue_push`, el interruptor pasa a verse "presionado") -- no es solo una bandera invisible.
+- **Punto de control**: `COLLISION_CHECKPOINT`, un solo "slot" de checkpoint (no una tabla por habitación). Tocarlo guarda posición + ID de habitación (`checkpoint_active/room/x_lo/x_hi/y`); `load_room` lo usa en vez del punto de aparición por defecto de la habitación cuando `checkpoint_room` coincide con la que se está cargando. Esto también corrige un caso que `respawn_player` (generalizado en F4.3 a `load_room(room_current)`) no cubría: morir y reaparecer ahora puede ser en un punto distinto al spawn fijo del mapa.
+- **Zona secreta**: `SECRET_WALL`, mismos tiles/paleta que `WALL` (visualmente idéntica) pero colisión vacía -- ningún código nuevo en `main.s`, es puramente una combinación de metatile en el mapa.
+- **Obstáculos**: decidido que ya están cubiertos por los tipos de colisión existentes (pared sólida, peligro, plataforma de un sentido) -- no se agregó un tipo de colisión nuevo porque no hay todavía una habilidad del jugador (romper, empujar) que justifique un obstáculo con comportamiento distinto a esos tres.
+- Comando de build: `make rom`.
+- Resultado de compilación: éxito, con 2 errores reales encontrados y corregidos en el camino (ver abajo).
+- **Bugs reales encontrados y corregidos durante la tarea:**
+  - Dos "Range error" de ensamblado (`ca65`): el bloque de chequeo de la plataforma móvil en `update_player` quedó demasiado largo para que un branch relativo (`bne`/`bmi`) alcanzara su destino (`@platform_done`, límite de ±127 bytes en 6502). Corregido con el patrón estándar "branch corto + `jmp`" (invertir la condición, branch corto a una etiqueta cercana que hace `jmp` sin límite de rango).
+  - Al agregar 2 tiles nuevos (checkpoint, interruptor) al tileset de fondo (ahora 8), los índices `TILE_CHIQUITO_IDLE/WALK/ENEMY/ITEM` quedaron desalineados otra vez (mismo patrón de bug que F4.3) -- corregido actualizándolos de 6/7/8/9 a 8/9/10/11 ANTES de compilar, ya no después de notar sprites con el tile equivocado.
+  - `tools/test_scenery.lua` (de la prueba, no del motor): el primer intento de probar "aterrizar en la plataforma" dejaba que la plataforma siguiera moviéndose sola mientras Chiquito caía, así que para cuando llegaba a la altura de aterrizaje la plataforma ya se había alejado lo suficiente para que el solape horizontal no se diera -- corregido fijando la posición de la plataforma durante esa ventana de la prueba (ya se había confirmado el movimiento real por separado). El primer intento de probar "morir y reaparecer en el checkpoint" teletransportaba a Chiquito a una Y mayor al umbral de muerte pero en una columna con suelo sólido ahí mismo, así que la colisión vertical lo empujaba de vuelta a una Y menor al umbral ANTES de que corriera el chequeo de muerte -- corregido usando el hueco real del mapa (columnas 13-14) para una caída libre genuina, igual que ya hacía `test_state_machine.lua`.
+- Pruebas ejecutadas: las 11 pruebas de FCEUX existentes + la nueva `tools/test_scenery.lua` + `tools/test_map2scene.py`.
+- Resultados observados: `RESULT=PASS` en las 12 pruebas de FCEUX y en `test_map2scene.py`. `test_scenery.lua` verifica, contra el mapa/ROM real: la plataforma se mueve sola dentro de sus límites, Chiquito puede aterrizar en ella sin atravesarla y lo arrastra mientras está arriba; la puerta bloqueada de la casa detiene el paso antes de activar el interruptor, activarlo cambia su tile real en VRAM (leído con `ppu.readbyte`, no solo la bandera) y después sí se puede cruzar; tocar el punto de control y luego morir por caída (en el hueco real) reaparece en la posición del checkpoint, no en el spawn original de pradera; y la pared secreta se atraviesa de verdad caminando (no se asume por el tipo de colisión, se confirma que Chiquito termina del otro lado).
+- Limitaciones pendientes: cada mecánica tiene un solo ejemplo hardcodeado, no un sistema general (N plataformas, N interruptores con N puertas, checkpoints por habitación) -- eso es trabajo de F5.1 (sistema de entidades) cuando haga falta escalar. El checkpoint es un solo slot global, no una tabla por habitación (alcanza para esta demo de 2 habitaciones). No probado en hardware real.
 
 ---
 

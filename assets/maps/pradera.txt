@@ -11,6 +11,12 @@
 # hueco (zona segura de "fin de nivel" para esta prueba), y una puerta
 # (columna 46, fila 9) que lleva a la Casa Pipapita, la habitacion fija
 # de F4.3.
+# F4.4: pantalla 1 agrega un punto de control (columna 20, fila 9) --
+# tocarlo mueve el punto de reaparicion dentro de esta habitacion hasta
+# la proxima transicion. Pantalla 2 agrega una pared secreta (columna
+# 33, filas 7-9) que se ve igual a una pared solida (W) pero es
+# atravesable -- zona secreta sin recompensa tangible en este milestone
+# (no hay sistema de items real todavia, Fase 5/6).
 # 'S' es especial: ademas de su metatile de leyenda, marca el punto de
 # aparicion del jugador (debe haber exactamente uno).
 .=SKY
@@ -22,6 +28,8 @@ W=WALL
 H=HAZARD
 S=SKY
 D=DOOR
+K=CHECKPOINT
+X=SECRET_WALL
 
 ................................................
 ................................................
@@ -30,9 +38,9 @@ D=DOOR
 ................................................
 ................................................
 ..........P.................P...................
-.W....WW................W.......................
-.W......................W.......................
-.W....S.................W.....................D.
+.W....WW................W........X..............
+.W......................W........X..............
+.W....S.............K...W........X............D.
 GGGGGGGGGGGGH..GGGGGGGGGGGGGGGGGGGGGGGGGHGGGGGGG
 FFFFFFFFFFFFF..FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF
 FFFFFFFFFFFFF..FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF

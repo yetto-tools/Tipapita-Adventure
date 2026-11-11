@@ -79,13 +79,22 @@
 **F0.2 funcionalmente cerrado.** Solo falta el linker config real, que se produce junto con la ROM mínima en F1.1 — ahí se valida la aceptación completa de esta tarea.
 
 ## F0.3 Definir identidad del juego [P1]
-- [ ] Proponer nombres originales para juego, protagonista y universo.
-- [ ] Definir premisa narrativa breve.
-- [ ] Definir fantasía central del jugador.
-- [ ] Definir pilares de experiencia.
+- [x] Proponer nombres originales para juego, protagonista y universo. *(tres rutas documentadas; elección pendiente de aprobación)*
+- [x] Definir premisa narrativa breve. *(propuesta documentada; pendiente de aprobación)*
+- [x] Definir fantasía central del jugador. *(propuesta documentada; pendiente de aprobación)*
+- [x] Definir pilares de experiencia. *(cinco pilares propuestos; pendientes de aprobación)*
 - [ ] Aprobar alcance inicial de mundos y mecánicas.
 
 **Aceptación:** decisiones documentadas en `GAME_DESIGN_DOCUMENT.md`; no inventar aprobaciones.
+
+**Estado (2026-11-11): En progreso.** `GAME_DESIGN_DOCUMENT.md` contiene las propuestas,
+el alcance recomendado y una lista explícita de aprobaciones pendientes. F0.3 no se
+considera cerrada hasta registrar la decisión del responsable del proyecto sobre
+nombres, grafía `Pipapita`/`Tipapita`, premisa, pilares y alcance.
+
+**Decisión registrada (2026-11-11):** título definitivo **Tipapita-Adventure**.
+Continúan pendientes el nombre del universo, la grafía interna de la familia y la
+aprobación de premisa, pilares y alcance.
 
 ---
 
@@ -398,12 +407,27 @@
 # Fase 5 — Enemigos y combate
 
 ## F5.1 Sistema de entidades [P1]
-- [ ] Definir estructura compacta de entidad.
-- [ ] Definir número máximo simultáneo.
-- [ ] Implementar creación y destrucción.
-- [ ] Implementar actualización por prioridad o zona.
+- [x] Definir estructura compacta de entidad.
+- [x] Definir número máximo simultáneo.
+- [x] Implementar creación y destrucción.
+- [x] Implementar actualización por prioridad o zona.
 
 **Aceptación:** entidades no corrompen memoria ni exceden límites definidos.
+
+**Registro de la tarea:**
+- Archivos: `src/main.s` (toda la lógica nueva, ver abajo), `tools/test_entities.lua` (nuevo), `tools/test_sprites.lua` (ajustado, ver bug real abajo).
+- **Estructura de entidad (decidido):** estructura-de-arrays (SoA), no array-de-estructuras -- 8 tablas paralelas (`entity_active/room/type/x_lo/x_hi/y/tile/attr`) indexadas por el mismo slot, en vez de un registro de N bytes por entidad. Es el patrón natural en 6502: direccionamiento `tabla,x` por campo es directo; calcular `base + slot*N` para acceder a un campo dentro de un registro compacto no lo es tanto. Las tablas viven en BSS (RAM $0300+), no en zeropage -- no necesitan direccionamiento indirecto, así que no hace falta gastar zeropage (cada vez más escaso) en ellas.
+- **MAX_ENTITIES = 8 (decidido):** coincide exactamente con el límite real de 8 sprites por scanline del hardware NES. Con entidades de 1 sprite cada una, nunca puede saturarse una sola línea por tener demasiadas activas -- el límite de la estructura de datos y el límite físico del hardware son el mismo número a propósito.
+- **Creación/destrucción:** `spawn_entity` (argumentos en escratch de ZEROPAGE, mismo patrón que `ppu_queue_push`) busca el primer slot libre; si las 8 ya están ocupadas, no hace nada y vuelve -- nunca escribe fuera de la tabla, nunca pisa una entidad existente. `destroy_entities_in_room(room)` desactiva las entidades activas de esa habitación específica; las de otras habitaciones no se tocan.
+- **Actualización por zona (decidido):** una entidad solo se dibuja/actualiza cuando `entity_room == room_current` (si no, su sprite de OAM se oculta con Y=$FF) -- la misma técnica que ya usaba la plataforma móvil de F4.4 para no existir fuera de pradera. No hay "prioridad" explícita todavía (no hace falta con 8 entidades como máximo); queda como posible extensión si Fase 6+ necesita ordenar actualización por distancia a la cámara.
+- **Migración de los placeholders de F2.3:** el "enemigo" y "coleccionable" de prueba (sprites estáticos escritos una sola vez en `oam_init_data`, sin comportamiento real desde que se crearon) ahora son 2 entidades reales, generadas por `load_room` cada vez que se entra a pradera (con `destroy_entities_in_room` primero, para no duplicar en cada visita). Mismo tile/posición/paleta que siempre tuvieron -- F5.1 es la infraestructura, no la IA (eso es F5.2); `entity_type` (`ENTITY_TYPE_ENEMY`/`ITEM`) es el gancho para cuando F5.2 le dé comportamiento real a cada tipo.
+- **Reorganización de OAM:** sprite 0 = Chiquito (sin cambios); sprites 1-8 (offsets 4-35) = entidades; sprites 9-10 (offsets 36-43) = plataforma móvil (se corrió desde el offset 12 de F4.4 para hacerle lugar a las entidades). `update_platform` ahora escribe también tile/atributo cada frame (antes dependía de `oam_init_data`) para no depender de ninguna entrada estática.
+- Comando de build: `make rom`.
+- Resultado de compilación: éxito, sin errores.
+- **Bug real encontrado y corregido (no en el motor, en la prueba):** `test_sprites.lua` sampleaba el framebuffer para el enemigo/ítem en posiciones de pantalla FIJAS (184,184)/(144,104), asumiendo que esos sprites nunca se movían con la cámara -- cierto mientras fueron estáticos (F2.3-F4.4, nunca ningún código los tocaba después del boot), pero ya NO es cierto con F5.1: ahora son entidades reales, relativas a cámara igual que Chiquito, así que su posición de pantalla cambia al caminar (correcto -- existen en una posición de MUNDO fija, como corresponde). La prueba fallaba con colores de fondo en vez de los del sprite. Corregido restando `camera_x_lo` a sus posiciones de mundo conocidas (180,179)/(140,99), igual que ya hacía la prueba para Chiquito desde F4.2. Esto además revela que la inconsistencia (entidades estáticas no relativas a cámara) existía silenciosamente desde F4.2 y nadie la había notado -- la prueba nunca caminaba lo suficiente para que la diferencia importara visualmente.
+- Pruebas ejecutadas: las 12 pruebas de FCEUX existentes (con el ajuste de `test_sprites.lua`) + la nueva `tools/test_entities.lua` + `tools/test_map2scene.py`.
+- Resultados observados: `RESULT=PASS` en las 13 pruebas de FCEUX y en `test_map2scene.py`. `test_entities.lua` verifica, contra el motor real: pradera genera exactamente 2 entidades con los campos correctos (habitación/tipo/posición/tile); al cambiar de habitación siguen activas en la tabla pero su OAM se oculta (confirmado leyendo el byte de OAM real, no solo la bandera); al volver a pradera no se duplican (sigue habiendo exactamente 2, no 4); y con la tabla llena de 8 centinelas de una habitación que no existe (para que ninguna transición real los toque), un intento de generar una entidad nueva falla sin tocar ninguno de los 8 centinelas -- ni desborde ni corrupción.
+- Limitaciones pendientes: sin comportamiento real todavía (patrulla, persecución, daño -- eso es F5.2); sin prioridad explícita de actualización, solo filtro por zona (alcanza con 8 entidades); solo pradera genera entidades por ahora (la Casa Pipapita no tiene ninguna). No probado en hardware real.
 
 ## F5.2 Enemigos básicos [P1]
 - [ ] Enemigo patrullero.

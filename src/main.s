@@ -228,6 +228,19 @@ SWITCH_NT_BL = $226C
 SWITCH_NT_BR = $226D
 TILE_SWITCH_PRESSED = 3   ; T_GROUND_FILL de tiles_pradera (ver tools/map2scene.py)
 
+; F5.1 (sistema de entidades). Ver la nota junto a las tablas en el
+; segmento BSS para el porqué de MAX_ENTITIES=8.
+MAX_ENTITIES = 8
+ENTITY_TYPE_ENEMY = 0
+ENTITY_TYPE_ITEM  = 1
+
+; Distribución del buffer de OAM: sprite 0 = Chiquito; sprites 1-8
+; (offsets 4-35, 4 bytes cada uno) = entidades (MAX_ENTITIES); sprites
+; 9-10 (offsets 36-43) = plataforma móvil (F4.4, movida aquí para
+; dejarle espacio a las entidades).
+ENTITY_OAM_BASE   = 4
+PLATFORM_OAM_BASE = ENTITY_OAM_BASE + MAX_ENTITIES * 4
+
 ; Presupuesto de bytes transmitidos por frame hacia el nametable físico
 ; que está fuera de vista (streaming de pantallas, ver
 ; update_camera_and_streaming). 16 bytes/frame tarda 1024/16=64 frames
@@ -253,19 +266,21 @@ PAD_LEFT   = %00000010
 PAD_RIGHT  = %00000001
 
 .segment "RODATA"
-; OAM inicial (3 sprites de prueba): Y, tile, atributos, X. Posición de
-; Chiquito es solo un valor placeholder -- load_room (llamado desde
-; reset antes del primer frame) la pisa con la posición real de la
-; habitación inicial, y @animate la mantiene correcta todos los frames
-; después de eso.
+; OAM inicial: Y, tile, atributos, X -- solo Chiquito. Posición es un
+; valor placeholder -- load_room (llamado desde reset antes del primer
+; frame) la pisa con la posición real de la habitación inicial, y
+; @animate la mantiene correcta todos los frames después de eso.
+;
+; F5.1: los sprites de "enemigo"/"coleccionable" de prueba (F2.3) ya NO
+; se inicializan acá -- eran placeholders estáticos sin comportamiento
+; real. Ahora viven como entidades de verdad (ver spawn_entity en
+; load_room), con la misma posición/tile/atributo de antes para no
+; cambiar nada visual, pero generadas y gestionadas por el sistema de
+; entidades real. La plataforma móvil (F4.4) tampoco tiene entrada acá
+; -- update_platform escribe Y/tile/atributo/X completos desde el
+; primer frame, no necesita un valor inicial estático.
 oam_init_data:
     .byte SCENE_PRADERA_SPAWN_Y, TILE_CHIQUITO_IDLE, %00000000, SCENE_PRADERA_SPAWN_X
-    .byte 179,     TILE_ENEMY,         %00000001, 180       ; enemigo
-    .byte 99,      TILE_ITEM,          %00000010, 140       ; coleccionable
-    ; Plataforma móvil (F4.4): 2 sprites de 8px uno al lado del otro.
-    ; Posición real la escribe update_platform desde el primer frame.
-    .byte PLATFORM_Y, TILE_PLATFORM_SPRITE, %00000000, 0    ; mitad izquierda
-    .byte PLATFORM_Y, TILE_PLATFORM_SPRITE, %00000000, 8    ; mitad derecha
 
 ; Descriptor de cada habitación (F4.3): un registro de ROOM_DESC_SIZE
 ; bytes por habitación, indexado por ROOM_PRADERA/ROOM_CASA*ROOM_DESC_SIZE
@@ -427,12 +442,44 @@ platform_x_lo: .res 1
 platform_x_hi: .res 1
 platform_dir:  .res 1
 
+; Argumentos de spawn_entity (F5.1): no deben usarse para nada más
+; mientras se está armando un spawn. Mismo patrón que pq_addr_hi/lo/
+; data para ppu_queue_push.
+entity_arg_room: .res 1
+entity_arg_type: .res 1
+entity_arg_x_lo: .res 1
+entity_arg_x_hi: .res 1
+entity_arg_y:    .res 1
+entity_arg_tile: .res 1
+entity_arg_attr: .res 1
+
 .segment "BSS"
 ppu_queue_len:       .res 1
 ppu_queue_overflow:  .res 1                      ; contador de escrituras descartadas por cola llena
 ppu_queue_addr_hi:   .res PPU_QUEUE_CAPACITY
 ppu_queue_addr_lo:   .res PPU_QUEUE_CAPACITY
 ppu_queue_data:      .res PPU_QUEUE_CAPACITY
+
+; Sistema de entidades (F5.1): estructura-de-arrays (SoA), no array-de-
+; estructuras -- cada campo es su propia tabla indexada por X, el
+; patrón natural en 6502 (direccionamiento "tabla,x" por campo, en vez
+; de calcular el offset de un registro de N bytes cada vez). MAX_ENTITIES
+; = 8 porque es exactamente el límite real de sprites por scanline del
+; hardware (NESDEV) -- ninguna combinación de entidades de 1 sprite
+; puede saturar una sola línea si nunca hay más de 8 activas a la vez.
+; `entity_room` es la "zona" de actualización/renderizado (F5.1 pide
+; "por prioridad o zona"): una entidad solo se actualiza/dibuja cuando
+; `entity_room == room_current`, igual que ya hace la plataforma móvil
+; con ROOM_PRADERA. `entity_type` no tiene comportamiento todavía --
+; es el gancho para que F5.2 distinga IA de enemigo vs. ítem.
+entity_active: .res MAX_ENTITIES
+entity_room:   .res MAX_ENTITIES
+entity_type:   .res MAX_ENTITIES
+entity_x_lo:   .res MAX_ENTITIES
+entity_x_hi:   .res MAX_ENTITIES
+entity_y:      .res MAX_ENTITIES
+entity_tile:   .res MAX_ENTITIES
+entity_attr:   .res MAX_ENTITIES
 
 .segment "OAM"
 oam_buffer: .res 256  ; página $0200-$02FF, fuente de la OAM DMA ($4014)
@@ -547,14 +594,15 @@ oam_buffer: .res 256  ; página $0200-$02FF, fuente de la OAM DMA ($4014)
     inx
     bne @oam_fill
 
-    ; Copia los 5 sprites de prueba (Chiquito, enemigo, coleccionable,
-    ; plataforma móvil x2 -- F4.4) al principio del buffer de OAM.
+    ; Copia el sprite de Chiquito al principio del buffer de OAM (F5.1:
+    ; el resto -- entidades y plataforma -- ya no tienen datos
+    ; iniciales estáticos, ver nota de oam_init_data).
     ldx #$00
 @oam_copy:
     lda oam_init_data,x
     sta oam_buffer,x
     inx
-    cpx #20
+    cpx #4
     bne @oam_copy
 
     ; Re-cero defensivo de posición fraccional y velocidad: ya deberían
@@ -628,6 +676,7 @@ mainloop:
     jsr update_player        ; F3.2: física + escribe posición/tile/flip al OAM
     jsr update_camera_and_streaming ; F4.2: cámara + streaming de pantallas
     jsr update_platform      ; F4.4: mueve la plataforma y escribe su OAM
+    jsr update_entities      ; F5.1: escribe el OAM de las entidades activas de la habitación actual
 
     jmp mainloop
 .endproc
@@ -1754,6 +1803,52 @@ mainloop:
     lda #STATE_IDLE
     sta player_state
 
+    ; F5.1: limpia las entidades de una visita anterior a ESTA
+    ; habitación (si las hay) y genera las de esta visita. Las
+    ; entidades de otras habitaciones no se tocan -- update_entities ya
+    ; las mantiene ocultas por zona mientras no sea la habitación
+    ; actual.
+    lda room_current
+    jsr destroy_entities_in_room
+
+    lda room_current
+    cmp #ROOM_PRADERA
+    bne @no_entities
+    ; Enemigo de prueba (F2.3, ahora una entidad real -- misma posición
+    ; y tile de siempre, sin IA todavía, eso es F5.2).
+    lda #ROOM_PRADERA
+    sta entity_arg_room
+    lda #ENTITY_TYPE_ENEMY
+    sta entity_arg_type
+    lda #<180
+    sta entity_arg_x_lo
+    lda #>180
+    sta entity_arg_x_hi
+    lda #179
+    sta entity_arg_y
+    lda #TILE_ENEMY
+    sta entity_arg_tile
+    lda #%00000001
+    sta entity_arg_attr
+    jsr spawn_entity
+    ; Coleccionable de prueba (F2.3, idem).
+    lda #ROOM_PRADERA
+    sta entity_arg_room
+    lda #ENTITY_TYPE_ITEM
+    sta entity_arg_type
+    lda #<140
+    sta entity_arg_x_lo
+    lda #>140
+    sta entity_arg_x_hi
+    lda #99
+    sta entity_arg_y
+    lda #TILE_ITEM
+    sta entity_arg_tile
+    lda #%00000010
+    sta entity_arg_attr
+    jsr spawn_entity
+@no_entities:
+
     ; Apaga el renderizado mientras se recarga VRAM -- un cambio de
     ; habitación es un corte discreto, no algo que tenga que repartirse
     ; en VBlanks sucesivos como el streaming de F4.2.
@@ -2020,21 +2115,131 @@ mainloop:
     cmp #ROOM_PRADERA
     beq @visible
     lda #$FF
-    sta oam_buffer+12         ; Y de ambos sprites: fuera de pantalla
-    sta oam_buffer+16
+    sta oam_buffer+PLATFORM_OAM_BASE+0     ; Y de ambos sprites: fuera de pantalla
+    sta oam_buffer+PLATFORM_OAM_BASE+4
     rts
 
 @visible:
+    ; F5.1: las entidades le hicieron lugar a la plataforma más abajo
+    ; en el buffer (PLATFORM_OAM_BASE, antes offset fijo 12). Tile y
+    ; atributo se escriben acá en vez de en oam_init_data -- ya no hay
+    ; ninguna entrada estática para la plataforma, solo para Chiquito.
     lda #PLATFORM_Y
-    sta oam_buffer+12
-    sta oam_buffer+16
+    sta oam_buffer+PLATFORM_OAM_BASE+0
+    sta oam_buffer+PLATFORM_OAM_BASE+4
+    lda #TILE_PLATFORM_SPRITE
+    sta oam_buffer+PLATFORM_OAM_BASE+1
+    sta oam_buffer+PLATFORM_OAM_BASE+5
+    lda #%00000000
+    sta oam_buffer+PLATFORM_OAM_BASE+2
+    sta oam_buffer+PLATFORM_OAM_BASE+6
     lda platform_x_lo
     sec
     sbc camera_x_lo           ; X relativa a pantalla (igual que @animate con el jugador)
-    sta oam_buffer+15
+    sta oam_buffer+PLATFORM_OAM_BASE+3
     clc
     adc #8
-    sta oam_buffer+19
+    sta oam_buffer+PLATFORM_OAM_BASE+7
+    rts
+.endproc
+
+; Busca el primer slot de entidad libre y lo ocupa con los argumentos
+; entity_arg_* (ver nota de ZEROPAGE). Si las MAX_ENTITIES ya están
+; activas, no hace nada y vuelve -- ninguna entidad existente se toca,
+; no hay desborde ni corrupción posible por diseño (el límite de la
+; tabla nunca se excede porque el índice nunca pasa de MAX_ENTITIES).
+.proc spawn_entity
+    ldx #0
+@find_free:
+    lda entity_active,x
+    beq @found
+    inx
+    cpx #MAX_ENTITIES
+    bne @find_free
+    rts                       ; tabla llena: no se puede, no se corrompe nada
+@found:
+    lda #1
+    sta entity_active,x
+    lda entity_arg_room
+    sta entity_room,x
+    lda entity_arg_type
+    sta entity_type,x
+    lda entity_arg_x_lo
+    sta entity_x_lo,x
+    lda entity_arg_x_hi
+    sta entity_x_hi,x
+    lda entity_arg_y
+    sta entity_y,x
+    lda entity_arg_tile
+    sta entity_tile,x
+    lda entity_arg_attr
+    sta entity_attr,x
+    rts
+.endproc
+
+; Desactiva todas las entidades activas cuya habitación (A, al entrar)
+; coincida. Usado por load_room para limpiar las entidades de una
+; visita anterior a la MISMA habitación antes de generar las nuevas --
+; así visitar una habitación varias veces no agota los slots de a poco.
+; Las entidades de OTRAS habitaciones no se tocan (quedan inactivas
+; para el renderizado por la zona de update_entities, sin necesitar
+; destruirlas hasta que se vuelva a visitar esa habitación).
+.proc destroy_entities_in_room
+    sta entity_arg_room       ; reusa el escratch de spawn como parámetro
+    ldx #0
+@loop:
+    lda entity_active,x
+    beq @next
+    lda entity_room,x
+    cmp entity_arg_room
+    bne @next
+    lda #0
+    sta entity_active,x
+@next:
+    inx
+    cpx #MAX_ENTITIES
+    bne @loop
+    rts
+.endproc
+
+; Escribe el OAM de cada entidad activa cuya habitación coincida con
+; room_current (la "zona" de actualización que pide F5.1 -- una
+; entidad de otra habitación no se dibuja ni gasta presupuesto de
+; sprites). Llamada una vez por frame desde el main loop.
+.proc update_entities
+    ldx #0
+@loop:
+    txa
+    asl a
+    asl a                     ; *4: cada sprite de OAM son 4 bytes
+    clc
+    adc #ENTITY_OAM_BASE
+    tay                       ; Y = offset en oam_buffer para esta entidad
+
+    lda entity_active,x
+    beq @hide
+    lda entity_room,x
+    cmp room_current
+    bne @hide
+
+    lda entity_y,x
+    sta oam_buffer,y
+    lda entity_tile,x
+    sta oam_buffer+1,y
+    lda entity_attr,x
+    sta oam_buffer+2,y
+    lda entity_x_lo,x
+    sec
+    sbc camera_x_lo           ; X relativa a pantalla (igual que @animate/update_platform)
+    sta oam_buffer+3,y
+    jmp @next
+@hide:
+    lda #$FF
+    sta oam_buffer,y
+@next:
+    inx
+    cpx #MAX_ENTITIES
+    bne @loop
     rts
 .endproc
 

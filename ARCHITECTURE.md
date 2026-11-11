@@ -1,5 +1,5 @@
 # ARCHITECTURE
-## Arquitectura técnica de Tipapita Adventure
+## Arquitectura técnica de Tipapita-Adventure
 
 ## 1. Plataforma
 
@@ -242,6 +242,16 @@ El color índice 0 de las 4 subpaletas de fondo (`$3F00`, `$3F04`, `$3F08`, `$3F
 - **Checkpoint como "slot" único, no tabla por habitación:** `checkpoint_room` + comparación contra `room_current` en `load_room` alcanza para 2 habitaciones. Generalizar a "un checkpoint por habitación simultáneamente" es una tabla indexada igual que `room_descriptors` -- no se construyó porque nada la necesita todavía.
 - **"Obstáculos" no agregó mecánica nueva:** decidido que los tipos de colisión ya existentes (sólido, peligro, plataforma de un sentido) ya cubren el concepto. Inventar un tipo de obstáculo nuevo sin una habilidad del jugador que interactúe distinto con él (romper, empujar) habría sido una mecánica sin propósito real.
 - **Bugs reales encontrados y corregidos:** 2 errores de rango de branch en ensamblado (el bloque de la plataforma móvil quedó demasiado largo para un `bne`/`bmi` relativo -- resuelto con branch-corto + `jmp`, patrón estándar de 6502); el mismo bug de desalineación de índices de sprite que F4.3 (ahora con 8 tiles de fondo, no 6). Ver registro completo en `TASKS.md` F4.4.
+
+### Sistema de entidades (decidido — F5.1, 2026-11-11)
+
+- **Estructura de arrays (SoA), no array de estructuras:** 8 tablas paralelas (`entity_active/room/type/x_lo/x_hi/y/tile/attr`), cada una indexada por el mismo número de slot, en vez de un registro compacto de N bytes por entidad. Es el patrón natural en 6502 -- `tabla,x` por campo es una sola instrucción; calcular `base + slot*N` para un campo dentro de un registro no lo es. Viven en BSS (RAM `$0300+`), no en zeropage: no necesitan direccionamiento indirecto, así que no vale la pena gastar la zeropage (cada vez más escasa) en ellas.
+- **`MAX_ENTITIES = 8`, no un número arbitrario:** coincide exactamente con el límite real de 8 sprites por scanline del hardware NES. Con entidades de 1 sprite cada una, el límite de la estructura de datos y el límite físico del hardware son el mismo número a propósito -- nunca puede haber overflow de sprites por scanline causado por demasiadas entidades activas.
+- **Zona = habitación, reutilizando el patrón de F4.3/F4.4:** una entidad solo se actualiza/dibuja cuando `entity_room == room_current`; si no, su sprite se oculta con `Y=$FF`. Es la misma técnica que ya usaba la plataforma móvil de F4.4 para no existir fuera de pradera -- F5.1 la generaliza a N entidades en vez de 1 plataforma hardcodeada.
+- **`load_room` limpia y repuebla las entidades de su propia habitación:** `destroy_entities_in_room(room)` antes de generar las nuevas evita que visitar la misma habitación muchas veces vaya agotando slots de a poco. Las entidades de OTRAS habitaciones no se tocan -- quedan inactivas para el renderizado por la zona, sin necesitar destruirlas hasta que se vuelva a visitar esa habitación (una limitación consciente, documentada en `TASKS.md`: con muchas habitaciones pobladas, convendría liberar slots también al SALIR de una habitación, no solo al reentrar -- no hace falta todavía con 2 habitaciones y 2 entidades).
+- **Los placeholders de F2.3 se migraron, no se duplicaron:** el "enemigo"/"coleccionable" de prueba (sprites estáticos desde F2.3, nunca tocados por ningún código después del arranque) ahora son 2 entidades reales generadas por `load_room`, mismo tile/posición/paleta de siempre. F5.1 es la infraestructura; comportamiento real (patrulla, persecución, daño) es F5.2 -- `entity_type` ya existe como el gancho para esa IA, pero hoy no hace nada.
+- **Hallazgo real (bug preexistente de F4.2, no de esta tarea):** los sprites estáticos de F2.3 NUNCA fueron relativos a cámara -- nadie los tocaba después del boot, así que cuando F4.2 agregó scroll, quedaron fijos en pantalla en vez de existir en una posición de mundo real (una inconsistencia silenciosa, nunca notada porque `test_sprites.lua` solo caminaba una distancia corta antes de samplear). Al migrarlos a entidades reales (ahora sí relativas a cámara, correctamente), la prueba empezó a fallar -- no por un bug de F5.1, sino porque corrigió el comportamiento inconsistente que tenían desde F4.2. Corregido el test para restar `camera_x_lo` a sus posiciones de mundo conocidas, igual que ya se hacía para Chiquito.
+- **Reorganización de OAM:** sprite 0 = Chiquito; sprites 1-8 (offsets 4-35) = entidades; sprites 9-10 (offsets 36-43) = plataforma móvil (se corrió desde el offset 12 de F4.4). `update_platform` ahora escribe tile/atributo cada frame en vez de depender de `oam_init_data` -- ya no hay ninguna entrada estática de estado inicial para la plataforma ni para las entidades, solo para Chiquito.
 
 ## 10. Rendimiento
 

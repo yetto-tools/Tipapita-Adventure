@@ -61,12 +61,22 @@ end
 -- en src/main.s), así que hay que restar camera_x_lo -- la misma resta
 -- de 8 bits que hace @animate para escribir el X real al OAM -- antes
 -- de usar la posición para samplear el framebuffer.
+-- F5.1: el enemigo/ítem de prueba ya no son sprites estáticos escritos
+-- una sola vez en oam_init_data (F2.3) -- son entidades reales
+-- (update_entities), y por lo tanto TAMBIÉN relativas a cámara, igual
+-- que Chiquito. Sus posiciones de MUNDO (180,179)/(140,99) son las
+-- mismas de siempre (ver spawn_entity en load_room, src/main.s); lo
+-- que cambia es que hay que restar camera_x_lo para samplear la
+-- posición de PANTALLA real, no la de mundo.
 local CAMERA_X_LO = 0x0023
+local camera_lo = memory.readbyte(CAMERA_X_LO)
 local px_world, py = memory.readbyte(X_HI), memory.readbyte(Y_HI)
-local px = (px_world - memory.readbyte(CAMERA_X_LO)) % 256
+local px = (px_world - camera_lo) % 256
+local enemy_px = (180 - camera_lo) % 256
+local item_px = (140 - camera_lo) % 256
 local cr, cg, cb = sample("chiquito", px + 4, py + 4)
-local er, eg, eb = sample("enemigo", 184, 184)
-local ir_, ig, ib = sample("item", 144, 104)
+local er, eg, eb = sample("enemigo", enemy_px + 4, 184)
+local ir_, ig, ib = sample("item", item_px + 4, 104)
 
 -- Puntos de "oreja/contorno" (índice de color 1, no 2): a diferencia del
 -- índice 2 -- que por coincidencia vale $16 en ambas subpaletas-- el
@@ -74,7 +84,7 @@ local ir_, ig, ib = sample("item", 144, 104)
 -- oscuro). Confirma que la subpaleta de sprite seleccionada por
 -- atributo realmente aplica.
 local cor, cog, cob = sample("chiquito_oreja", px + 1, py + 1)
-local eor, eog, eob = sample("enemigo_oreja", 181, 181)
+local eor, eog, eob = sample("enemigo_oreja", enemy_px + 1, 181)
 local subpalette_differs = not (cor == eor and cog == eog and cob == eob)
 
 local sprites_distinct_from_bg = not is_blue_sky(cr, cg, cb) and not is_green_ground(cr, cg, cb)

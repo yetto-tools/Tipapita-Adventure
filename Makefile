@@ -29,8 +29,9 @@ CHIQUITO_POSE_TABLES := $(BUILD_DIR)/chiquito_pose_tables.s
 CHIQUITO_POSES := chiquito chiquito_caminar_1 chiquito_caminar_2 chiquito_correr chiquito_saltar
 CHIQUITO_POSE_FILES := $(foreach p,$(CHIQUITO_POSES),assets/sprites/nes_referencias/$(p).chr assets/sprites/nes_referencias/$(p).json)
 TILES_CAST    := $(BUILD_DIR)/tiles_cast.s
+TILES_BOSS    := $(BUILD_DIR)/tiles_boss.s
 FCEUX_TEST := xvfb-run -a -s "-screen 0 256x240x24" env SDL_AUDIODRIVER=dummy fceux
-FCEUX_TESTS := init nmi palette tiles sprites controller movement collision state_machine scrolling rooms scenery entities npc enemies weapons pickup goal
+FCEUX_TESTS := init nmi palette tiles sprites controller movement collision state_machine scrolling rooms scenery entities npc enemies weapons pickup goal boss
 
 .PHONY: all rom check test clean run
 
@@ -74,7 +75,13 @@ $(TILES_SCENERY): assets/sprites/scenery_v1.png tools/png2chr.py | $(BUILD_DIR)
 $(TILES_CAST): assets/sprites/nes_referencias/sanchopau.chr tools/chr2asm.py | $(BUILD_DIR)
 	$(PYTHON) tools/chr2asm.py assets/sprites/nes_referencias/sanchopau.chr $(TILES_CAST) --label tiles_cast
 
-$(OBJ): $(SRC_DIR)/main.s $(TILES_PRADERA) $(SCENE_PRADERA) $(SCENE_CASA) $(TILES_CHIQUITO) $(CHIQUITO_POSE_TABLES) $(TILES_SCENERY) $(TILES_CAST) | $(BUILD_DIR)
+# F5.4: el jefe (guardián de roca), misma conversión fiel real (sin
+# resize) ya hecha para el bestiario de F5.2 -- nunca se había
+# integrado a la ROM hasta ahora.
+$(TILES_BOSS): assets/sprites/nes_referencias/enemigo_roca.chr tools/chr2asm.py | $(BUILD_DIR)
+	$(PYTHON) tools/chr2asm.py assets/sprites/nes_referencias/enemigo_roca.chr $(TILES_BOSS) --label tiles_boss
+
+$(OBJ): $(SRC_DIR)/main.s $(TILES_PRADERA) $(SCENE_PRADERA) $(SCENE_CASA) $(TILES_CHIQUITO) $(CHIQUITO_POSE_TABLES) $(TILES_SCENERY) $(TILES_CAST) $(TILES_BOSS) | $(BUILD_DIR)
 	$(CA65) -g -l $(LST) -o $(OBJ) $(SRC_DIR)/main.s
 
 $(ROM): $(OBJ) $(LINKER_CFG)

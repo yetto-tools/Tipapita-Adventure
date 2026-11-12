@@ -132,6 +132,10 @@
 ; habitación propia donde aparecer, así que mapearlos ahora solo
 ; gastaría presupuesto de pattern table sin ningún uso real.
 .include "../dist/tiles_cast.s"
+; F5.4: el jefe (guardián de roca), justo después del resto del elenco
+; (94-103) -- conversión fiel real de enemigo_roca.chr, igual pipeline
+; que tiles_cast.s (tools/chr2asm.py, sin pasar por PNG ni resize).
+.include "../dist/tiles_boss.s"
 
 ; F5.1c: por pose, qué tile ABSOLUTO (dentro de la pattern table de
 ; sprites de arriba) y qué subpaleta de hardware (0 o 1) usa cada una de
@@ -157,6 +161,12 @@ TILE_CAST_BASE             = 78
 ; poses a mano quedó peor que esta conversión directa -- ver el
 ; registro de la tarea en TASKS.md.
 TILE_SANCHOPAU_BASE = TILE_CAST_BASE
+
+; F5.4 (jefe): 10 de los 16 tiles posibles tienen pieza real (ver
+; boss_tile más abajo, con $FF en las celdas vacías) -- a diferencia de
+; Sanchopau, la silueta de enemigo_roca.chr NO llena la grilla 4x4
+; completa, así que no alcanza con "tile = BASE + índice" directo.
+TILE_BOSS_BASE = TILE_SANCHOPAU_BASE + 16
 
 ; F5.1c: identificadores de pose de Chiquito, para elegir qué par de
 ; tablas (chiquito_<pose>_tile / _pal) usar en draw_player_metasprite.
@@ -196,6 +206,22 @@ chiquito_pose_pal_hi:
 ; la tabla (reposa en el piso, offset 0). Pico de 8px a mitad del arco.
 enemy_hop_offset:
     .byte 0,1,3,5,6,7,8,8,8,8,7,6,5,3,1,0
+
+; F5.4: qué tile ABSOLUTO usa cada una de las 16 celdas de la grilla
+; 4x4 del jefe -- $FF donde enemigo_roca.chr no tiene pieza real (mismo
+; criterio que las tablas de pose de Chiquito). Copiado directo de los
+; campos x/y/tile de assets/sprites/nes_referencias/enemigo_roca.json
+; (índice de celda = (y/8)*4 + (x/8)), no a mano. Una sola subpaleta de
+; sprite (ver draw_boss_metasprite) -- a diferencia de Sanchopau/
+; Chiquito, el jefe no tiene una paleta de hardware propia disponible
+; en pradera (los 4 slots ya están repartidos entre Chiquito y el
+; enemigo/ítem de prueba), así que no hace falta una tabla de paleta
+; por tile.
+boss_tile:
+    .byte $FF,$FF,$FF,$FF
+    .byte $FF,TILE_BOSS_BASE+0,TILE_BOSS_BASE+1,$FF
+    .byte TILE_BOSS_BASE+2,TILE_BOSS_BASE+3,TILE_BOSS_BASE+4,TILE_BOSS_BASE+5
+    .byte TILE_BOSS_BASE+6,TILE_BOSS_BASE+7,TILE_BOSS_BASE+8,TILE_BOSS_BASE+9
 
 ; Hitbox del jugador (definida en F2.3, usada desde F3.3). Un sprite de
 ; 8x8 completo, sin margen todavía.
@@ -421,6 +447,34 @@ PLAYER_PROJECTILE_LIFETIME = 20
 ; mismo comportamiento ya probado desde F3.4.
 PLAYER_PROJECTILE_LIMIT = 1
 
+; F5.4 (jefe): guardián de roca. Vive fijo en un punto de la pantalla 2
+; de pradera (no patrulla -- alcance acotado a propósito para un primer
+; jefe, ver limitaciones en TASKS.md) y alterna 2 fases en el lugar:
+; GUARD (cubierto/invulnerable -- tocarlo hace daño real al jugador,
+; igual que un enemigo) y EXPOSED (vulnerable -- el proyectil del
+; jugador le hace daño; tocarlo NO lastima). Reusa el arte real ya
+; convertido de "roca" (F5.1b, assets/sprites/nes_referencias/
+; enemigo_roca.*) -- una sola pose, sin animación de ataque/daño
+; dedicada, mismo criterio que Sanchopau.
+BOSS_X = 592   ; pantalla 2 (512-767px), entre la pared secreta (528) y el peligro (640)
+BOSS_Y = 152   ; misma altura real de piso que el resto de los enemigos (ver nota F5.2)
+BOSS_HEALTH_MAX = 5
+; A esta vida o menos entra en fase 2: el ciclo GUARD se acorta a la
+; mitad y agrega un disparo de proyectil por ciclo -- un cambio de
+; comportamiento real, no solo un número que baja (satisface "fases").
+BOSS_PHASE2_HEALTH = 2
+BOSS_GUARD_DURATION_P1 = 120   ; fase 1: 2s cubierto antes de exponerse
+BOSS_GUARD_DURATION_P2 = 60    ; fase 2: la mitad -- el combate se acelera
+BOSS_EXPOSED_DURATION  = 60    ; 1s vulnerable, igual en ambas fases
+BOSS_PROJECTILE_FIRE_FRAME = 20   ; fase 2 únicamente: dispara una vez por GUARD, a este frame del ciclo
+
+; BOSS_STATE_GUARD=0 y BOSS_STATE_EXPOSED=1 a propósito: update_boss
+; alterna entre ambos con un solo EOR #1 al vencer boss_timer, sin un
+; cmp/bne por estado.
+BOSS_STATE_GUARD    = 0
+BOSS_STATE_EXPOSED  = 1
+BOSS_STATE_DEFEATED = 2
+
 ; Distribución del buffer de OAM: sprites 0-7 = entidades; sprites 8-9 =
 ; plataforma móvil; sprites 10-25 = Chiquito (F5.1c: 16 piezas, grilla
 ; 4x4, ya no 4 -- ver PLAYER_OAM_BASE). Se mantiene ENTITY_OAM_BASE=4
@@ -449,6 +503,14 @@ NPC_Y        = 152   ; misma banda de piso que SCENE_CASA_SPAWN_Y (fila 9 del ma
 NPC_MIN_X    = 120   ; columnas 7-9 del mapa de casa_pipapita.txt: piso libre,
 NPC_MAX_X    = 150   ; lejos del interruptor (columna 6) y de la puerta bloqueada (columna 10)
 NPC_SPEED_DIVISOR = %00000011   ; se mueve 1px cada 4 frames -- paso tranquilo, no el del jugador
+
+; F5.4 (jefe): metasprite de 32x32 (16 sprites de OAM, igual bloque que
+; Sanchopau/Chiquito) + una barra de vida de 5 sprites (uno por punto
+; de vida, BOSS_HEALTH_MAX). Son los últimos 84 bytes libres del buffer
+; de OAM (256 bytes = 64 sprites totales) -- no queda presupuesto para
+; nada más después de esto.
+BOSS_OAM_BASE        = NPC_OAM_BASE + 64
+BOSS_HEALTH_OAM_BASE  = BOSS_OAM_BASE + 64
 
 ; Presupuesto de bytes transmitidos por frame hacia el nametable físico
 ; que está fuera de vista (streaming de pantallas, ver
@@ -782,6 +844,22 @@ entity_timer:    .res MAX_ENTITIES
 ; las entidades).
 items_collected: .res 1
 
+; F5.4 (jefe): estado propio, separado del sistema de entidades (igual
+; criterio que platform_*/npc_* -- un solo jefe fijo, no una tabla
+; genérica). boss_state/health/timer se reinician explícitamente en
+; load_room cada vez que carga pradera (no persisten la derrota entre
+; visitas -- ver limitaciones en TASKS.md). boss_fired_this_guard evita
+; disparar más de un proyectil por ciclo GUARD en fase 2.
+boss_state:  .res 1
+boss_health: .res 1
+boss_timer:  .res 1
+boss_fired_this_guard: .res 1
+boss_draw_x: .res 1
+boss_draw_y: .res 1
+boss_row:    .res 1
+boss_col:    .res 1
+boss_row4:   .res 1
+
 .segment "OAM"
 oam_buffer: .res 256  ; página $0200-$02FF, fuente de la OAM DMA ($4014)
 
@@ -990,6 +1068,9 @@ mainloop:
     jsr check_enemy_contact  ; F5.2: daño por contacto con enemigo/proyectil (HURT, igual que un peligro de tile)
     jsr check_player_attacks ; F5.3: impactos del proyectil del jugador contra enemigos
     jsr check_item_pickup    ; cierre del "Hito obligatorio": recoger coleccionables reales
+    jsr update_boss          ; F5.4: fases del jefe + dibuja su OAM y barra de vida
+    jsr check_boss_contact   ; F5.4: daño al jugador si toca al jefe en fase GUARD
+    jsr check_player_vs_boss ; F5.4: daño al jefe si su proyectil lo toca en fase EXPOSED
     jsr update_entities      ; F5.1: escribe el OAM de las entidades activas de la habitación actual
     jsr update_npc           ; F5.1b: patrulla y OAM de Sanchopau (solo visible en Casa)
 
@@ -2499,6 +2580,19 @@ mainloop:
     lda #ENEMY_RANGED_FIRE_COOLDOWN
     sta entity_arg_timer
     jsr spawn_entity
+
+    ; F5.4: el jefe arranca siempre a vida completa y en fase GUARD al
+    ; cargar pradera -- no persiste una derrota entre visitas (mismo
+    ; criterio que las entidades normales, ver limitaciones en
+    ; TASKS.md).
+    lda #BOSS_HEALTH_MAX
+    sta boss_health
+    lda #BOSS_STATE_GUARD
+    sta boss_state
+    lda #BOSS_GUARD_DURATION_P1
+    sta boss_timer
+    lda #0
+    sta boss_fired_this_guard
 @no_entities:
 
     ; Apaga el renderizado mientras se recarga VRAM -- un cambio de
@@ -3487,6 +3581,453 @@ mainloop:
 @next:
     inx
     cpx #MAX_ENTITIES
+    bne @loop
+    rts
+.endproc
+
+; F5.4 (jefe): oculta los 16 sprites del metasprite + los 5 de la
+; barra de vida. Usado tanto al salir de pradera como al quedar
+; derrotado (BOSS_STATE_DEFEATED) -- en ambos casos el jefe no debe
+; dibujarse.
+.proc hide_boss_oam
+    ldx #0
+@loop_boss:
+    lda #$FF
+    sta oam_buffer+BOSS_OAM_BASE,x
+    inx
+    inx
+    inx
+    inx
+    cpx #64
+    bne @loop_boss
+    ldx #0
+@loop_health:
+    lda #$FF
+    sta oam_buffer+BOSS_HEALTH_OAM_BASE,x
+    inx
+    inx
+    inx
+    inx
+    cpx #20
+    bne @loop_health
+    rts
+.endproc
+
+; F5.4: dx = BOSS_X - player_x_px, 16 bits con signo, en
+; enemy_dx_lo/hi -- misma primitiva que compute_entity_dx pero contra
+; la posición FIJA del jefe en vez de una entidad indexada por X.
+.proc compute_boss_dx
+    lda #<BOSS_X
+    sec
+    sbc player_x_px_lo
+    sta enemy_dx_lo
+    lda #>BOSS_X
+    sbc player_x_px_hi
+    sta enemy_dx_hi
+    rts
+.endproc
+
+; F5.4: daño al jugador por contacto con el jefe, SOLO en fase GUARD
+; (cubierto/invulnerable -- en EXPOSED no lastima al tocarlo). Mismo
+; AABB de 8x8 y el mismo enter_hurt_state que check_enemy_contact.
+.proc check_boss_contact
+    lda room_current
+    cmp #ROOM_PRADERA
+    bne @done
+    lda boss_state
+    cmp #BOSS_STATE_GUARD
+    bne @done
+    lda player_state
+    cmp #STATE_HURT
+    beq @done
+    cmp #STATE_DEAD
+    beq @done
+    cmp #STATE_WIN
+    beq @done
+
+    jsr compute_boss_dx
+    lda enemy_dx_hi
+    beq @dx_check_pos
+    cmp #$FF
+    bne @done
+    lda enemy_dx_lo
+    cmp #(256-ENTITY_HITBOX_W)
+    bcc @done
+    jmp @dx_ok
+@dx_check_pos:
+    lda enemy_dx_lo
+    cmp #ENTITY_HITBOX_W
+    bcs @done
+@dx_ok:
+    lda #BOSS_Y
+    sec
+    sbc player_y_hi
+    bpl @dy_check
+    eor #$FF
+    clc
+    adc #1
+@dy_check:
+    cmp #ENTITY_HITBOX_H
+    bcs @done
+    jsr enter_hurt_state
+@done:
+    rts
+.endproc
+
+; F5.4: daño al jefe por el proyectil del jugador, SOLO en fase
+; EXPOSED (vulnerable). Al llegar boss_health a 0, deja al jefe
+; BOSS_STATE_DEFEATED y dispara STATE_WIN del jugador directamente
+; (derrota y recompensa: vencer al jefe gana el nivel, igual que tocar
+; la meta -- ver STATE_WIN en update_player).
+.proc check_player_vs_boss
+    lda room_current
+    cmp #ROOM_PRADERA
+    bne @done
+    lda boss_state
+    cmp #BOSS_STATE_EXPOSED
+    bne @done
+
+    ldx #0
+@loop:
+    lda entity_active,x
+    beq @next
+    lda entity_type,x
+    cmp #ENTITY_TYPE_PLAYER_PROJECTILE
+    bne @next
+    lda entity_room,x
+    cmp room_current
+    bne @next
+
+    lda #<BOSS_X
+    sec
+    sbc entity_x_lo,x
+    sta enemy_dx_lo
+    lda #>BOSS_X
+    sbc entity_x_hi,x
+    sta enemy_dx_hi
+
+    lda enemy_dx_hi
+    beq @dx_check_pos
+    cmp #$FF
+    bne @next
+    lda enemy_dx_lo
+    cmp #(256-ENTITY_HITBOX_W)
+    bcc @next
+    jmp @dx_ok
+@dx_check_pos:
+    lda enemy_dx_lo
+    cmp #ENTITY_HITBOX_W
+    bcs @next
+@dx_ok:
+    lda #BOSS_Y
+    sec
+    sbc entity_y,x
+    bpl @dy_check
+    eor #$FF
+    clc
+    adc #1
+@dy_check:
+    cmp #ENTITY_HITBOX_H
+    bcs @next
+
+    ; Impacto real: se consume el proyectil y el jefe pierde 1 de vida.
+    lda #0
+    sta entity_active,x
+    dec boss_health
+    bne @not_defeated
+    lda #BOSS_STATE_DEFEATED
+    sta boss_state
+    lda #STATE_WIN
+    sta player_state
+    lda #WIN_DURATION
+    sta state_timer
+    lda #0
+    sta player_vx_lo
+    sta player_vx_hi
+    sta player_vy_lo
+    sta player_vy_hi
+@not_defeated:
+    lda #1
+    sta sfx_pickup_pending
+
+@next:
+    inx
+    cpx #MAX_ENTITIES
+    bne @loop
+@done:
+    rts
+.endproc
+
+; F5.4 (fase 2 únicamente): dispara un proyectil horizontal desde la
+; posición del jefe hacia el lado donde esté Chiquito en ese instante
+; -- misma entidad/projectile_step genérico que el atacante a
+; distancia de F5.2, sin cooldown propio (update_boss ya garantiza como
+; mucho un disparo por ciclo GUARD vía boss_fired_this_guard).
+.proc boss_fire_projectile
+    jsr compute_boss_dx
+    lda enemy_dx_hi
+    bmi @dir_right              ; dx<0: jugador a la derecha -> bala a la derecha (dir=0)
+    lda #1                      ; dx>=0: jugador a la izquierda (o igual) -> bala a la izquierda (dir=1)
+    jmp @dir_have
+@dir_right:
+    lda #0
+@dir_have:
+    sta entity_arg_dir
+
+    lda #ROOM_PRADERA
+    sta entity_arg_room
+    lda #ENTITY_TYPE_PROJECTILE
+    sta entity_arg_type
+    lda #<BOSS_X
+    sta entity_arg_x_lo
+    lda #>BOSS_X
+    sta entity_arg_x_hi
+    lda #BOSS_Y
+    sta entity_arg_y
+    lda #TILE_ITEM               ; sin arte dedicado todavía -- ver limitaciones en TASKS.md
+    sta entity_arg_tile
+    lda #%00000001
+    sta entity_arg_attr
+    lda #0
+    sta entity_arg_behavior
+    lda #PROJECTILE_LIFETIME
+    sta entity_arg_timer
+    jsr spawn_entity
+    rts
+.endproc
+
+; F5.4: máquina de estados del jefe. Llamada una vez por frame desde
+; el main loop. boss_timer cuenta hacia abajo dentro de la fase actual
+; (GUARD o EXPOSED); al llegar a 0, alterna de fase con un solo EOR #1
+; (ver la nota junto a BOSS_STATE_GUARD/EXPOSED) y recarga el
+; temporizador según corresponda -- la duración de GUARD depende de la
+; vida restante (fase 1 vs fase 2, ver BOSS_PHASE2_HEALTH). En fase 2,
+; dispara un proyectil una sola vez por ciclo GUARD, al frame
+; BOSS_PROJECTILE_FIRE_FRAME del ciclo.
+.proc update_boss
+    lda room_current
+    cmp #ROOM_PRADERA
+    beq @room_ok
+    jsr hide_boss_oam
+    rts
+@room_ok:
+    lda boss_state
+    cmp #BOSS_STATE_DEFEATED
+    bne @alive
+    jsr hide_boss_oam
+    rts
+@alive:
+    dec boss_timer
+    bne @no_phase_change
+    lda boss_state
+    eor #1
+    sta boss_state
+    cmp #BOSS_STATE_EXPOSED
+    beq @entered_exposed
+@entered_guard:
+    lda boss_health
+    cmp #(BOSS_PHASE2_HEALTH+1)
+    bcc @guard_p2
+    lda #BOSS_GUARD_DURATION_P1
+    jmp @guard_timer_set
+@guard_p2:
+    lda #BOSS_GUARD_DURATION_P2
+@guard_timer_set:
+    sta boss_timer
+    lda #0
+    sta boss_fired_this_guard
+    jmp @no_phase_change
+@entered_exposed:
+    lda #BOSS_EXPOSED_DURATION
+    sta boss_timer
+@no_phase_change:
+
+    lda boss_state
+    cmp #BOSS_STATE_GUARD
+    bne @no_fire
+    lda boss_health
+    cmp #(BOSS_PHASE2_HEALTH+1)
+    bcs @no_fire              ; todavía en fase 1: no dispara
+    lda boss_fired_this_guard
+    bne @no_fire
+    lda boss_timer
+    cmp #BOSS_PROJECTILE_FIRE_FRAME
+    bne @no_fire
+    jsr boss_fire_projectile
+    lda #1
+    sta boss_fired_this_guard
+@no_fire:
+
+    ; Bug real encontrado con tools/test_sprites.lua: aunque BOSS_X
+    ; esté lejos en X de la cámara, sus sprites seguían "activos" para
+    ; la evaluación de la PPU por scanline (el hardware no sabe de
+    ; coordenadas de mundo, solo de Y) -- sumados a Chiquito y al resto
+    ; de enemigos en la misma banda de piso, overflow real ($2002 bit
+    ; 5). Se oculta el jefe entero (metasprite + barra de vida) salvo
+    ; que esté cerca de la pantalla visible -- igual técnica que ya usa
+    ; el resto del juego para ahorrar sprites fuera de cámara.
+    lda #<BOSS_X
+    sec
+    sbc camera_x_lo
+    sta enemy_dx_lo
+    lda #>BOSS_X
+    sbc camera_x_hi
+    sta enemy_dx_hi
+
+    lda enemy_dx_lo
+    sta cmp_a_lo
+    lda enemy_dx_hi
+    sta cmp_a_hi
+    lda #<(-32)
+    sta cmp_b_lo
+    lda #>(-32)
+    sta cmp_b_hi
+    jsr cmp16_signed          ; N=1 si dx < -32 (el jefe quedó muy a la izquierda)
+    bmi @not_visible
+
+    lda enemy_dx_lo
+    sta cmp_a_lo
+    lda enemy_dx_hi
+    sta cmp_a_hi
+    lda #<289
+    sta cmp_b_lo
+    lda #>289
+    sta cmp_b_hi
+    jsr cmp16_signed          ; N=1 si dx < 289 (visible); N=0 si >=289 (muy a la derecha)
+    bpl @not_visible
+
+    jsr draw_boss_metasprite
+    jsr draw_boss_health
+    rts
+@not_visible:
+    jsr hide_boss_oam
+    rts
+.endproc
+
+; Dibuja al jefe (grilla 4x4 de tiles 8x8, BOSS_X/BOSS_Y) -- misma
+; ancla física que Chiquito/Sanchopau (hitbox 8x8 centrado, arte
+; extendido 12px a cada lado y 24px hacia arriba). $FF en boss_tile
+; oculta esa celda (la silueta de enemigo_roca.chr no llena la grilla).
+; Una sola pose, sin flip -- el jefe no se mueve ni cambia de
+; orientación.
+.proc draw_boss_metasprite
+    lda #<BOSS_X
+    sec
+    sbc camera_x_lo
+    sec
+    sbc #12
+    sta boss_draw_x
+
+    lda #BOSS_Y
+    sec
+    sbc #24
+    sta boss_draw_y
+
+    lda #0
+    sta boss_row
+@row_loop:
+    lda boss_row
+    asl a
+    asl a
+    sta boss_row4
+
+    lda boss_row
+    asl a
+    asl a
+    asl a
+    clc
+    adc boss_draw_y
+    pha
+
+    lda #0
+    sta boss_col
+@col_loop:
+    lda boss_row
+    asl a
+    asl a
+    clc
+    adc boss_col
+    asl a
+    asl a
+    tax
+
+    pla
+    pha
+    sta oam_buffer+BOSS_OAM_BASE+0,x
+
+    lda boss_col
+    asl a
+    asl a
+    asl a
+    clc
+    adc boss_draw_x
+    sta oam_buffer+BOSS_OAM_BASE+3,x
+
+    lda boss_col
+    clc
+    adc boss_row4
+    tay
+
+    lda boss_tile,y
+    cmp #$FF
+    bne @tile_real
+    lda #$FF
+    sta oam_buffer+BOSS_OAM_BASE+0,x
+    jmp @next_col
+@tile_real:
+    sta oam_buffer+BOSS_OAM_BASE+1,x
+    lda #%00000001
+    sta oam_buffer+BOSS_OAM_BASE+2,x
+
+@next_col:
+    inc boss_col
+    lda boss_col
+    cmp #4
+    bne @col_loop
+    pla
+    inc boss_row
+    lda boss_row
+    cmp #4
+    beq @done                  ; bucle más largo que 127 bytes: branch corto + jmp (patrón ya usado en update_player)
+    jmp @row_loop
+@done:
+    rts
+.endproc
+
+; Barra de vida del jefe (F5.4): 5 sprites fijos en pantalla (no
+; relativos a cámara -- es HUD, no un objeto del mundo), uno por punto
+; de vida. BOSS_HEALTH_MAX-boss_health de ellos quedan ocultos. Reusa
+; TILE_ITEM como placeholder -- sin arte dedicado de "pip" todavía.
+.proc draw_boss_health
+    ldx #0
+@loop:
+    txa
+    asl a
+    asl a
+    tay
+
+    cpx boss_health
+    bcs @hide_pip
+    lda #8
+    sta oam_buffer+BOSS_HEALTH_OAM_BASE+0,y
+    lda #TILE_ITEM
+    sta oam_buffer+BOSS_HEALTH_OAM_BASE+1,y
+    lda #%00000010
+    sta oam_buffer+BOSS_HEALTH_OAM_BASE+2,y
+    txa
+    asl a
+    asl a
+    asl a
+    clc
+    adc #8
+    sta oam_buffer+BOSS_HEALTH_OAM_BASE+3,y
+    jmp @next
+@hide_pip:
+    lda #$FF
+    sta oam_buffer+BOSS_HEALTH_OAM_BASE+0,y
+@next:
+    inx
+    cpx #BOSS_HEALTH_MAX
     bne @loop
     rts
 .endproc

@@ -586,6 +586,8 @@ aprobación de premisa, pilares y alcance.
 
 **Aceptación:** audio estable, música y efectos coordinados y sin bloqueos.
 
+**Nota (2026-11-12):** para cerrar el "Hito obligatorio" del nivel vertical se agregó un único efecto de sonido real (canal pulse 1, `play_sfx_pickup` en `src/main.s`), sin driver ni formato de secuencias ni música -- ninguna casilla de esta fase se marca como hecha por eso. Ver el registro completo en "Hito obligatorio" más abajo.
+
 ---
 
 # Fase 8 — Contenido completo
@@ -639,25 +641,39 @@ aprobación de premisa, pilares y alcance.
 
 ---
 
-## Hito obligatorio: primer nivel vertical
+## Hito obligatorio: primer nivel vertical — 100% cumplido (2026-11-12)
 
 Antes de producir todos los mundos, completar un nivel corto que contenga:
 
-- protagonista original provisional;
-- controles;
-- movimiento y salto;
-- colisiones;
-- escenario colorido;
-- scrolling horizontal;
-- al menos una habitación fija;
-- transición entre ambos modos;
-- un enemigo;
-- un coleccionable;
-- música o efecto original;
-- meta/salida;
-- ROM ejecutable y pruebas.
+- [x] protagonista original provisional;
+- [x] controles;
+- [x] movimiento y salto;
+- [x] colisiones;
+- [x] escenario colorido;
+- [x] scrolling horizontal;
+- [x] al menos una habitación fija;
+- [x] transición entre ambos modos;
+- [x] un enemigo;
+- [x] un coleccionable;
+- [x] música o efecto original;
+- [x] meta/salida;
+- [x] ROM ejecutable y pruebas.
 
 Este hito valida arquitectura, arte, físicas y pipeline. No sustituye el objetivo de crear el juego completo.
+
+**Registro del cierre (2026-11-12):** los primeros 9 puntos ya estaban cubiertos por F1-F5.2 (ver sus propios registros). Esta tarea cerró los 3 últimos pendientes:
+
+- **Coleccionable real:** el ítem de prueba (F2.3/F5.1) pasó de ser puramente decorativo a recogerse de verdad. `check_item_pickup` (`src/main.s`, llamado desde `mainloop` después de `check_player_attacks`) hace el mismo AABB de 8x8 que `check_enemy_contact`/`check_player_attacks` (reusa `compute_entity_dx`), filtrado por `entity_type=ENTITY_TYPE_ITEM`: al tocarlo, lo desactiva, suma `items_collected` (BSS, nuevo -- sin HUD todavía para mostrarlo) y pide el efecto de sonido.
+- **Efecto de sonido real:** `play_sfx_pickup` escribe los registros reales del canal pulse 1 de la APU ($4000-$4003, duty 25%/volumen constante, periodo ~126 = ~880Hz, índice de longitud 1 -- se apaga solo). `reset` ahora habilita ese canal en $4015 (antes NUNCA se tocaba -- sin esto, cualquier escritura a $4000-$4003 no sonaba). Disparado vía una bandera (`sfx_pickup_pending`) que `nmi` consume una vez por frame -- mismo patrón que la cola de PPU. Usado tanto por el coleccionable como por la meta (un solo efecto, sin distinguir eventos todavía).
+- **Meta/salida de nivel:** nuevo tipo de colisión `COLLISION_GOAL` (`tools/map2scene.py`, metatile `GOAL` que reusa el tile de `CHECKPOINT` con la paleta de `WALL`/`SWITCH` -- sin arte dedicado, ver limitaciones) colocado en `assets/maps/pradera.txt` (columna 43, fila 9, antes de la puerta a la Casa Pipapita). Tocarla entra en `STATE_WIN` (nuevo estado, mismo patrón que `STATE_DEAD`: se congela `WIN_DURATION`=90 frames, pide el efecto de sonido, y al expirar llama a `respawn_player` -- reinicia el nivel actual en vez de avanzar a un mundo nuevo, porque no hay más niveles ni una pantalla real de "nivel completo" sin HUD/texto. Es el cierre honesto para esta demo, no la versión final de una meta de nivel).
+- **Bug real encontrado y corregido:** el chequeo que recalcula IDLE/WALK/JUMP/FALL cada frame (`update_player`, cerca de `@skip_recompute`) excluía HURT/ATTACK/DEAD pero NO WIN -- `STATE_WIN` se pisaba de vuelta a IDLE en el MISMO frame en que se activaba (confirmado real con `tools/test_goal.lua`: el estado nunca llegaba a verse como WIN desde Lua, aunque el efecto de sonido sí se disparaba porque esa bandera se fija antes del pisado). Corregido agregando `STATE_WIN` a ese guard.
+- **Bug real encontrado y corregido (prueba, no motor):** `tools/test_pickup.lua`/`test_goal.lua` usaban `&` para leer un bit de `$4015` -- Lua 5.1 (el que usa FCEUX) no tiene operadores bitwise nativos; `&` es un error de sintaxis. El proceso de FCEUX quedó corriendo sin script adjunto (alto uso de CPU, sin avanzar) en vez de fallar limpio -- hubo que matarlo a mano. Corregido leyendo el bit con `% 2 == 1` en vez de una operación bitwise.
+- Archivos: `src/main.s` (`STATE_WIN`/`WIN_DURATION`, `COLLISION_GOAL`, `items_collected`, `sfx_pickup_pending`, `play_sfx_pickup`, `check_item_pickup`, bloque de meta en `update_player`, habilitación de `$4015` en `reset`, 2 líneas nuevas en `mainloop`), `tools/map2scene.py` (`COLLISION_GOAL`, metatile `GOAL`), `assets/maps/pradera.txt` (columna 43 fila 9), `tools/test_pickup.lua` y `tools/test_goal.lua` (nuevos), `Makefile` (`pickup`/`goal` agregados a `FCEUX_TESTS`).
+- Comando de build: `make rom` (WSL Ubuntu, toolchain de F0.1).
+- Resultado de compilación: éxito (mismos 3 warnings de alineación de `CHARS` ya documentados y esperados desde F5.1b).
+- Pruebas ejecutadas: `make clean && make test` -- las 17 pruebas de FCEUX existentes + las 2 nuevas (`pickup`, `goal`) + `tools/test_map2scene.py`, desde una compilación limpia.
+- Resultados observados: `RESULT=PASS` en las 19 pruebas de FCEUX y en `test_map2scene.py`. `test_pickup.lua` verifica, contra la ROM real: un enemigo en la posición del jugador NO se recoge como ítem (filtra por tipo); un ítem real sí se recoge (se desactiva, `items_collected` sube de 0 a 1) y dispara el canal pulse 1 de verdad (`$4015` bit0 activo, no inventado). `test_goal.lua` verifica: tocar la meta entra en `STATE_WIN` y suena; el jugador queda congelado de verdad (sostener Right 10 frames no mueve la posición); a los 90 frames reaparece exactamente en `(96,152)`, pradera, en `STATE_IDLE`.
+- Limitaciones pendientes: sin HUD ni texto en pantalla -- `items_collected` no se muestra en ningún lado, y "ganar" se ve igual que "reaparecer", sin ninguna señal visual de victoria más allá de quedarse quieto 1.5s; el mismo efecto de sonido se usa para recoger un ítem y para tocar la meta, sin distinguir tipos de evento; el tile de la meta reusa gráficos existentes (checkpoint + paleta de pared), no es arte dedicado; solo hay una meta en todo el juego, hardcodeada en el mapa de pradera, no un sistema genérico de metas por nivel; "reiniciar el nivel" es un placeholder de "nivel completo" -- no hay progresión real a un mundo siguiente. No probado en hardware real.
 
 ## Registro por tarea
 

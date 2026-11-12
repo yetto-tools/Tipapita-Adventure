@@ -26,7 +26,7 @@ Formato del archivo de mapa:
 
 Metatile = (tile_tl, tile_tr, tile_bl, tile_br, paleta, colisión).
 Colisión: 0=vacío, 1=sólido, 2=plataforma (un sentido), 3=peligro, 4=puerta,
-5=punto de control, 6=interruptor, 7=puerta bloqueada.
+5=punto de control, 6=interruptor, 7=puerta bloqueada, 8=meta de nivel.
 
 F4.3 (puertas/habitaciones): una celda de colisión "puerta" no bloquea
 el movimiento (igual que peligro, el jugador puede pisarla) pero
@@ -69,6 +69,9 @@ COLLISION_DOOR = 4
 COLLISION_CHECKPOINT = 5
 COLLISION_SWITCH = 6
 COLLISION_LOCKED_DOOR = 7
+# Meta/salida de nivel (cierre del "Hito obligatorio" del nivel
+# vertical, ver TASKS.md) -- ver COLLISION_GOAL en src/main.s.
+COLLISION_GOAL = 8
 
 METATILES = {
     "SKY": (T_BLANK, T_BLANK, T_BLANK, T_BLANK, PAL_SKY, COLLISION_EMPTY),
@@ -90,6 +93,11 @@ METATILES = {
     # Mismos tiles y paleta que WALL -- se ve exactamente igual a una
     # pared sólida, pero es atravesable. Esconde una zona secreta (F4.4).
     "SECRET_WALL": (T_GROUND_FILL, T_GROUND_FILL, T_GROUND_FILL, T_GROUND_FILL, PAL_TIERRA, COLLISION_EMPTY),
+    # Reusa el tile de CHECKPOINT con la paleta de WALL/SWITCH (no la de
+    # CHECKPOINT) -- se ve distinto de ambos sin necesitar arte nuevo.
+    # Limitación real: sigue siendo un placeholder compartido, no un
+    # tile de "meta" dedicado (ver TASKS.md).
+    "GOAL": (T_CHECKPOINT, T_CHECKPOINT, T_CHECKPOINT, T_CHECKPOINT, PAL_TIERRA, COLLISION_GOAL),
 }
 
 SCREEN_COLS = 16   # ancho de una pantalla/nametable, en metatiles -- fijo, es hardware.
@@ -234,7 +242,7 @@ def emit_ca65(screens, collision_bytes, width, spawn_x, spawn_y, out_path, label
         f"; Mapa de colisión del nivel completo ({upper}_LEVEL_COLS x MT_ROWS),",
         f"; 1 byte por metatile; índice = fila*{upper}_LEVEL_COLS + columna.",
         "; 0=vacío, 1=sólido, 2=plataforma (un sentido), 3=peligro, 4=puerta,",
-        "; 5=punto de control, 6=interruptor, 7=puerta bloqueada.",
+        "; 5=punto de control, 6=interruptor, 7=puerta bloqueada, 8=meta.",
         f"{label}_collision:",
     ] + byte_rows(collision_bytes)
 

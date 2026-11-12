@@ -30,7 +30,7 @@ CHIQUITO_POSES := chiquito chiquito_caminar_1 chiquito_caminar_2 chiquito_correr
 CHIQUITO_POSE_FILES := $(foreach p,$(CHIQUITO_POSES),assets/sprites/nes_referencias/$(p).chr assets/sprites/nes_referencias/$(p).json)
 TILES_CAST    := $(BUILD_DIR)/tiles_cast.s
 FCEUX_TEST := xvfb-run -a -s "-screen 0 256x240x24" env SDL_AUDIODRIVER=dummy fceux
-FCEUX_TESTS := init nmi palette tiles sprites controller movement collision state_machine scrolling rooms scenery entities npc enemies weapons
+FCEUX_TESTS := init nmi palette tiles sprites controller movement collision state_machine scrolling rooms scenery entities npc enemies weapons pickup goal
 
 .PHONY: all rom check test clean run
 

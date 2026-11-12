@@ -8,6 +8,9 @@
 ;   2) Vacía la cola de actualizaciones de PPU (si hay algo encolado).
 ;   3) Marca `frame_ready` y avanza `frame_count`, para sincronizar al
 ;      main loop con la tasa real de refresco (60 Hz NTSC).
+;   4) (cierre del "Hito obligatorio") dispara el efecto de sonido del
+;      canal pulse 1 si algo lo pidió este frame (sfx_pickup_pending) --
+;      ver play_sfx_pickup.
 ; Todavía NO se escriben registros de scroll (no hay cámara, Fase 4) ni se
 ; implementa IRQ de mapper (no hay HUD con split-screen todavía).
 ;
@@ -221,6 +224,9 @@ COLLISION_DOOR     = 4
 COLLISION_CHECKPOINT = 5
 COLLISION_SWITCH     = 6
 COLLISION_LOCKED_DOOR = 7
+; Meta/salida de nivel (cierre del "Hito obligatorio" en TASKS.md).
+; Tocarla entra en STATE_WIN -- ver la nota junto a esa constante.
+COLLISION_GOAL = 8
 
 ; Estados del jugador (F3.4). IDLE/WALK/JUMP/FALL se recalculan cada
 ; frame a partir de la física (on_ground, vx, vy) cuando no hay un
@@ -234,10 +240,20 @@ STATE_FALL   = 3
 STATE_ATTACK = 4
 STATE_HURT   = 5
 STATE_DEAD   = 6
+; Cierre del hito del nivel vertical (ver "Hito obligatorio" en
+; TASKS.md): al tocar la meta (COLLISION_GOAL) se congela a Chiquito
+; igual que STATE_DEAD, pero sin el peligro de HURT/DEAD -- WIN_DURATION
+; después, vuelve a aparecer al inicio de la habitación actual (mismo
+; mecanismo que respawn_player) en vez de avanzar a un mundo nuevo: no
+; hay todavía más niveles ni pantalla de "nivel completo" (sin HUD/
+; texto real), así que reiniciar el mismo nivel es el cierre honesto
+; para esta demo.
+STATE_WIN    = 7
 
 ATTACK_DURATION = 14   ; ~0.23s: sin arma/hitbox real todavía (F5.3) -- solo "enraíza" el movimiento
 HURT_DURATION   = 30   ; ~0.5s de invulnerabilidad con parpadeo tras tocar un peligro
 DEAD_DURATION   = 40   ; ~0.67s congelado antes de reaparecer
+WIN_DURATION    = 90   ; ~1.5s congelado en la meta antes de reiniciar el nivel
 
 ; 4.0 px/frame: con MOVE_FRICTION decayendo a este ritmo, el empuje debe
 ; alejar a Chiquito más allá del ancho de un metatile (16px) para que no
@@ -686,6 +702,13 @@ enemy_dx_hi:   .res 1
 enemy_hop_tmp: .res 1   ; escratch de enemy_chaser_step, no usar en otro lado
 enemy_save_x:  .res 1   ; guarda el índice de entidad (X) mientras enemy_ranged_step llama a spawn_entity (que usa X desde 0)
 
+; Cierre del "Hito obligatorio" (coleccionable real + efecto de
+; sonido). sfx_pickup_pending: 1 cuando algo (recoger un ítem, tocar la
+; meta) pidió el efecto este frame -- nmi lo consume y lo vuelve a 0
+; después de escribir los registros de la APU, para no reescribirlos
+; de más en cada frame mientras el canal todavía está sonando.
+sfx_pickup_pending: .res 1
+
 .segment "BSS"
 ppu_queue_len:       .res 1
 ppu_queue_overflow:  .res 1                      ; contador de escrituras descartadas por cola llena
@@ -752,6 +775,13 @@ entity_behavior: .res MAX_ENTITIES
 entity_dir:      .res MAX_ENTITIES
 entity_timer:    .res MAX_ENTITIES
 
+; Cierre del "Hito obligatorio": cuántos coleccionables recogió el
+; jugador en la partida actual (sin HUD todavía para mostrarlo -- ver
+; limitaciones en TASKS.md). Se resetea a 0 en el reset de la consola,
+; NO en cada load_room (persiste entre habitaciones, a diferencia de
+; las entidades).
+items_collected: .res 1
+
 .segment "OAM"
 oam_buffer: .res 256  ; página $0200-$02FF, fuente de la OAM DMA ($4014)
 
@@ -794,6 +824,14 @@ oam_buffer: .res 256  ; página $0200-$02FF, fuente de la OAM DMA ($4014)
     stx $2000               ; PPUCTRL=0: NMI desactivado
     stx $2001               ; PPUMASK=0: fondo y sprites desactivados
     stx $4010               ; desactiva el IRQ del canal DMC
+
+    ; F7 (parcial): habilita el canal pulse 1 de la APU (bit0 de $4015)
+    ; -- sin esto, cualquier escritura a $4000-$4003 no suena (el canal
+    ; queda silenciado aunque su registro de volumen diga lo contrario).
+    ; Pulse 2/triangle/noise/DMC quedan deshabilitados: no hay todavía
+    ; ningún efecto que los use.
+    lda #%00000001
+    sta $4015
 
     ; Inicializa el mapper MMC3: fija las 6 ventanas de CHR (R0-R5) al
     ; banco físico 0 y las 2 ventanas swappeables de PRG (R6-R7) a bancos
@@ -951,10 +989,34 @@ mainloop:
     jsr update_enemies       ; F5.2: IA de enemigos + movimiento/vida de proyectiles
     jsr check_enemy_contact  ; F5.2: daño por contacto con enemigo/proyectil (HURT, igual que un peligro de tile)
     jsr check_player_attacks ; F5.3: impactos del proyectil del jugador contra enemigos
+    jsr check_item_pickup    ; cierre del "Hito obligatorio": recoger coleccionables reales
     jsr update_entities      ; F5.1: escribe el OAM de las entidades activas de la habitación actual
     jsr update_npc           ; F5.1b: patrulla y OAM de Sanchopau (solo visible en Casa)
 
     jmp mainloop
+.endproc
+
+; Cierre del "Hito obligatorio" (F7 parcial): un único efecto de
+; sonido real, en el canal pulse 1 ($4000-$4003), usado tanto para
+; recoger un coleccionable como para tocar la meta -- sin distinguir
+; tipos de evento todavía (ver limitaciones en TASKS.md). Formato de
+; $4000 (DDLCVVVV): duty 10 (25%), length counter NO retenido (se deja
+; apagar solo), volumen constante al máximo. $4001 (sweep) en 0:
+; desactivado. $4002/$4003: periodo ~126 (unos 880 Hz a reloj NTSC,
+; nota aguda tipo "bling") + índice 1 de la tabla de longitud de la APU
+; (valor real 254 unidades del contador de longitud, bits 3-7 de
+; $4003) -- se apaga solo sin necesidad de volver a tocar el registro
+; cada frame.
+.proc play_sfx_pickup
+    lda #%10011111
+    sta $4000
+    lda #%00000000
+    sta $4001
+    lda #126
+    sta $4002
+    lda #%00001000     ; longitud índice 1, bits altos del periodo = 0
+    sta $4003
+    rts
 .endproc
 
 .proc nmi
@@ -993,6 +1055,14 @@ mainloop:
     inc frame_count
     lda #$01
     sta frame_ready
+
+    ; 4) Efecto de sonido pendiente (cierre del "Hito obligatorio").
+    lda sfx_pickup_pending
+    beq @no_sfx
+    jsr play_sfx_pickup
+    lda #0
+    sta sfx_pickup_pending
+@no_sfx:
 
     pla
     tay
@@ -1180,6 +1250,19 @@ mainloop:
 @still_dead:
     rts                      ; congelado: nada más corre mientras está muerto
 @not_dead:
+
+    ; Cierre del "Hito obligatorio": STATE_WIN se congela y reaparece
+    ; exactamente igual que STATE_DEAD (mismo respawn_player) -- lo
+    ; único que cambia es cómo se entra (tocar la meta, no caerse).
+    cmp #STATE_WIN
+    bne @not_win
+    dec state_timer
+    bne @still_win
+    jsr respawn_player
+    jmp @animate
+@still_win:
+    rts
+@not_win:
 
     cmp #STATE_HURT
     bne @not_hurt
@@ -1875,6 +1958,45 @@ mainloop:
     sta checkpoint_y
 @checkpoint_skip:
 
+    ; --- Meta de nivel (cierre del "Hito obligatorio" -- ver TASKS.md):
+    ; mismo chequeo de 2 esquinas que CHECKPOINT/SWITCH. Se evita por
+    ; completo mientras ya está en STATE_WIN -- si no, quedarse parado
+    ; sobre la meta reiniciaría el temporizador cada frame y nunca
+    ; llegaría a reaparecer.
+    lda player_state
+    cmp #STATE_WIN
+    beq @goal_skip
+
+    lda #0
+    jsr set_col_x
+    lda player_y_hi
+    clc
+    adc #(PLAYER_HITBOX_H-1)
+    sta col_y
+    jsr get_tile_collision
+    cmp #COLLISION_GOAL
+    beq @goal_hit
+
+    lda #(PLAYER_HITBOX_W-1)
+    jsr set_col_x
+    jsr get_tile_collision
+    cmp #COLLISION_GOAL
+    bne @goal_skip
+
+@goal_hit:
+    lda #STATE_WIN
+    sta player_state
+    lda #WIN_DURATION
+    sta state_timer
+    lda #0
+    sta player_vx_lo
+    sta player_vx_hi
+    sta player_vy_lo
+    sta player_vy_hi
+    lda #1
+    sta sfx_pickup_pending
+@goal_skip:
+
     ; --- Muerte por caída (F3.4): si Y pasa el umbral y no está ya en
     ; DEAD, congela a Chiquito hasta que expire el temporizador --
     ; respawn_player lo reaparece (ver el chequeo de STATE_DEAD al
@@ -1904,6 +2026,8 @@ mainloop:
     cmp #STATE_ATTACK
     beq @skip_recompute
     cmp #STATE_DEAD
+    beq @skip_recompute
+    cmp #STATE_WIN
     beq @skip_recompute
     jsr recompute_normal_state
 @skip_recompute:
@@ -2873,6 +2997,8 @@ mainloop:
     beq @done
     cmp #STATE_DEAD
     beq @done
+    cmp #STATE_WIN
+    beq @done
 
     ldx #0
 @loop:
@@ -3307,6 +3433,61 @@ mainloop:
     inx
     cpx #MAX_ENTITIES
     bne @outer
+    rts
+.endproc
+
+; Cierre del "Hito obligatorio": recoger un coleccionable real. Mismo
+; AABB de 8x8 que check_enemy_contact (reusa compute_entity_dx), pero
+; sin dañar al jugador -- al tocarlo, desactiva el ítem, suma
+; items_collected y pide el efecto de sonido (sfx_pickup_pending,
+; consumido por nmi). Llamado una vez por frame desde el main loop.
+.proc check_item_pickup
+    ldx #0
+@loop:
+    lda entity_active,x
+    beq @next
+    lda entity_type,x
+    cmp #ENTITY_TYPE_ITEM
+    bne @next
+    lda entity_room,x
+    cmp room_current
+    bne @next
+
+    jsr compute_entity_dx
+    lda enemy_dx_hi
+    beq @dx_check_pos
+    cmp #$FF
+    bne @next
+    lda enemy_dx_lo
+    cmp #(256-ENTITY_HITBOX_W)
+    bcc @next
+    jmp @dx_ok
+@dx_check_pos:
+    lda enemy_dx_lo
+    cmp #ENTITY_HITBOX_W
+    bcs @next
+@dx_ok:
+    lda entity_y,x
+    sec
+    sbc player_y_hi
+    bpl @dy_check
+    eor #$FF
+    clc
+    adc #1
+@dy_check:
+    cmp #ENTITY_HITBOX_H
+    bcs @next
+
+    lda #0
+    sta entity_active,x
+    inc items_collected
+    lda #1
+    sta sfx_pickup_pending
+
+@next:
+    inx
+    cpx #MAX_ENTITIES
+    bne @loop
     rts
 .endproc
 

@@ -17,6 +17,9 @@
 # 33, filas 7-9) que se ve igual a una pared solida (W) pero es
 # atravesable -- zona secreta sin recompensa tangible en este milestone
 # (no hay sistema de items real todavia, Fase 5/6).
+# Cierre del "Hito obligatorio" (nivel vertical, ver TASKS.md): columna
+# 43, fila 9 agrega la meta de nivel (M) -- tocarla entra en STATE_WIN
+# (src/main.s) y reinicia el nivel tras una pausa.
 # 'S' es especial: ademas de su metatile de leyenda, marca el punto de
 # aparicion del jugador (debe haber exactamente uno).
 .=SKY
@@ -30,6 +33,7 @@ S=SKY
 D=DOOR
 K=CHECKPOINT
 X=SECRET_WALL
+M=GOAL
 
 ................................................
 ............C..............C..............C.....
@@ -40,7 +44,7 @@ X=SECRET_WALL
 ..........P.................P...................
 .W....WW................W........X..............
 .W......................W........X..............
-.W....S.............K...W........X............D.
+.W....S.............K...W........X.........M..D.
 GGGGGGGGGGGGH..GGGGGGGGGGGGGGGGGGGGGGGGGHGGGGGGG
 FFFFFFFFFFFFF..FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF
 FFFFFFFFFFFFF..FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF

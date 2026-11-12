@@ -380,6 +380,31 @@ ENEMY_RANGED_FIRE_COOLDOWN = 90
 PROJECTILE_SPEED = 2
 PROJECTILE_LIFETIME = 60
 
+; F5.3 (armas y proyectiles). El GAME_DESIGN_DOCUMENT.md describe el
+; ataque básico de Chiquito como "de corto alcance"; en vez de un swing
+; de melé (hitbox fija pegada al jugador) se implementa como un
+; proyectil de verdad -- TASKS.md titula esta fase "Armas y
+; PROYECTILES" y pide explícitamente "crear proyectiles"/"administrar
+; límite de proyectiles" como entregables. Reusa toda la
+; infraestructura de proyectiles de F5.2 (misma entidad, mismo
+; projectile_step, misma PROJECTILE_SPEED) -- entity_type distingue
+; "proyectil enemigo" de "proyectil del jugador" porque check_enemy_
+; contact (daña al jugador) y check_player_attacks (daña enemigos,
+; nuevo) necesitan tratarlos distinto. El "corto alcance" del diseño se
+; logra con una vida más corta (ENEMY_RANGED usa 60 frames = 120px;
+; esto usa 20 frames = 40px, un tercio), no con una velocidad distinta
+; -- mantiene projectile_step 100% genérico, sin un campo de velocidad
+; por entidad que nada más necesita todavía.
+ENTITY_TYPE_PLAYER_PROJECTILE = 3
+PLAYER_PROJECTILE_LIFETIME = 20
+; Límite de proyectiles del jugador simultáneos (F5.3: "administrar
+; límite de proyectiles"). Con el límite en 1, basta con comprobar "no
+; hay ninguno activo todavía" (player_has_active_projectile) en vez de
+; contar -- mismo resultado, menos código. Un ataque que no logra
+; disparar (límite alcanzado) igual enraíza el movimiento del jugador,
+; mismo comportamiento ya probado desde F3.4.
+PLAYER_PROJECTILE_LIMIT = 1
+
 ; Distribución del buffer de OAM: sprites 0-7 = entidades; sprites 8-9 =
 ; plataforma móvil; sprites 10-25 = Chiquito (F5.1c: 16 piezas, grilla
 ; 4x4, ya no 4 -- ver PLAYER_OAM_BASE). Se mantiene ENTITY_OAM_BASE=4
@@ -925,6 +950,7 @@ mainloop:
     jsr update_platform      ; F4.4: mueve la plataforma y escribe su OAM
     jsr update_enemies       ; F5.2: IA de enemigos + movimiento/vida de proyectiles
     jsr check_enemy_contact  ; F5.2: daño por contacto con enemigo/proyectil (HURT, igual que un peligro de tile)
+    jsr check_player_attacks ; F5.3: impactos del proyectil del jugador contra enemigos
     jsr update_entities      ; F5.1: escribe el OAM de las entidades activas de la habitación actual
     jsr update_npc           ; F5.1b: patrulla y OAM de Sanchopau (solo visible en Casa)
 
@@ -1172,9 +1198,8 @@ mainloop:
 @not_attack:
 
     ; Estado normal (IDLE/WALK/JUMP/FALL): ¿se presiona B para atacar?
-    ; Sin arma/hitbox real todavía (eso es F5.3) -- por ahora ATTACK solo
-    ; "enraíza" el movimiento horizontal, un comportamiento real y
-    ; verificable aunque no haga daño todavía.
+    ; F5.3: ahora dispara un proyectil real (ver la nota junto a
+    ; ENTITY_TYPE_PLAYER_PROJECTILE) además de enraizar el movimiento.
     lda pad1_pressed
     and #PAD_B
     beq @movement_start
@@ -1182,6 +1207,52 @@ mainloop:
     sta player_state
     lda #ATTACK_DURATION
     sta state_timer
+
+    ; F5.3: no dispara si ya hay un proyectil del jugador activo
+    ; (PLAYER_PROJECTILE_LIMIT=1) -- el ataque igual enraíza el
+    ; movimiento arriba, dispare o no.
+    jsr player_has_active_projectile
+    bne @movement_start
+
+    lda player_facing_right
+    bne @attack_spawn_right
+@attack_spawn_left:
+    lda player_x_px_lo
+    sec
+    sbc #PLAYER_HITBOX_W
+    sta entity_arg_x_lo
+    lda player_x_px_hi
+    sbc #0
+    sta entity_arg_x_hi
+    lda #1
+    sta entity_arg_dir
+    jmp @attack_spawn_y
+@attack_spawn_right:
+    lda player_x_px_lo
+    clc
+    adc #PLAYER_HITBOX_W
+    sta entity_arg_x_lo
+    lda player_x_px_hi
+    adc #0
+    sta entity_arg_x_hi
+    lda #0
+    sta entity_arg_dir
+@attack_spawn_y:
+    lda player_y_hi
+    sta entity_arg_y
+    lda room_current
+    sta entity_arg_room
+    lda #ENTITY_TYPE_PLAYER_PROJECTILE
+    sta entity_arg_type
+    lda #TILE_ITEM            ; sin arte dedicado todavía -- ver limitaciones en TASKS.md/ASSET_MANIFEST.md
+    sta entity_arg_tile
+    lda #%00000001
+    sta entity_arg_attr
+    lda #0
+    sta entity_arg_behavior
+    lda #PLAYER_PROJECTILE_LIFETIME
+    sta entity_arg_timer
+    jsr spawn_entity
 
 @movement_start:
     ; HURT y ATTACK bloquean el input horizontal/de salto (fricción y
@@ -2878,6 +2949,8 @@ mainloop:
     beq @is_enemy
     cmp #ENTITY_TYPE_PROJECTILE
     beq @do_projectile
+    cmp #ENTITY_TYPE_PLAYER_PROJECTILE    ; F5.3: mismo movimiento/vida que el proyectil enemigo (projectile_step es genérico)
+    beq @do_projectile
     jmp @next
 @is_enemy:
     lda entity_behavior,x
@@ -3118,6 +3191,122 @@ mainloop:
     bcs @rts
     dec entity_x_hi,x
 @rts:
+    rts
+.endproc
+
+; F5.3: devuelve en A (y en Z, para branch directo con beq/bne) si hay
+; algún proyectil del jugador activo en la habitación ACTUAL. Filtrado
+; por habitación a propósito: update_enemies (que mueve/consume la
+; vida de los proyectiles vía projectile_step) solo procesa entidades
+; de room_current -- un proyectil disparado justo antes de cruzar una
+; puerta se queda "congelado" (nunca se decrementa) en la habitación
+; que se abandonó. Sin este filtro, ese proyectil abandonado se vería
+; como "activo para siempre" y bloquearía disparar de nuevo en
+; cualquier otra habitación. Usado para el límite de 1 proyectil
+; simultáneo (PLAYER_PROJECTILE_LIMIT).
+.proc player_has_active_projectile
+    ldx #0
+@loop:
+    lda entity_active,x
+    beq @next
+    lda entity_room,x
+    cmp room_current
+    bne @next
+    lda entity_type,x
+    cmp #ENTITY_TYPE_PLAYER_PROJECTILE
+    beq @found
+@next:
+    inx
+    cpx #MAX_ENTITIES
+    bne @loop
+    lda #0
+    rts
+@found:
+    lda #1
+    rts
+.endproc
+
+; F5.3: detecta impactos del proyectil del jugador contra enemigos
+; (lo inverso de check_enemy_contact). X recorre proyectiles del
+; jugador activos de la habitación actual; Y recorre enemigos activos
+; de la misma habitación -- mismo AABB de 8x8 que check_enemy_contact,
+; reusando enemy_dx_lo/hi como escratch (no hay conflicto: un solo
+; hilo, nada más lo usa a la vez). Al primer impacto desactiva AMBOS:
+; el proyectil se consume y el enemigo queda derrotado. Sin sistema de
+; vida/puntos todavía -- un enemigo derrotado simplemente deja de
+; existir hasta que se vuelva a cargar la habitación (load_room lo
+; regenera de cero, igual que cualquier revisita).
+.proc check_player_attacks
+    ldx #0
+@outer:
+    lda entity_active,x
+    beq @outer_next
+    lda entity_type,x
+    cmp #ENTITY_TYPE_PLAYER_PROJECTILE
+    bne @outer_next
+    lda entity_room,x
+    cmp room_current
+    bne @outer_next
+
+    ldy #0
+@inner:
+    cpy #MAX_ENTITIES
+    beq @outer_next
+    lda entity_active,y
+    beq @inner_next
+    lda entity_type,y
+    cmp #ENTITY_TYPE_ENEMY
+    bne @inner_next
+    lda entity_room,y
+    cmp room_current
+    bne @inner_next
+
+    lda entity_x_lo,y
+    sec
+    sbc entity_x_lo,x
+    sta enemy_dx_lo
+    lda entity_x_hi,y
+    sbc entity_x_hi,x
+    sta enemy_dx_hi
+
+    lda enemy_dx_hi
+    beq @dx_check_pos
+    cmp #$FF
+    bne @inner_next
+    lda enemy_dx_lo
+    cmp #(256-ENTITY_HITBOX_W)
+    bcc @inner_next
+    jmp @dx_ok
+@dx_check_pos:
+    lda enemy_dx_lo
+    cmp #ENTITY_HITBOX_W
+    bcs @inner_next
+@dx_ok:
+    lda entity_y,y
+    sec
+    sbc entity_y,x
+    bpl @dy_check
+    eor #$FF
+    clc
+    adc #1
+@dy_check:
+    cmp #ENTITY_HITBOX_H
+    bcs @inner_next
+
+    ; Impacto real: se consume el proyectil y se derrota al enemigo.
+    lda #0
+    sta entity_active,x
+    sta entity_active,y
+    jmp @outer_next
+
+@inner_next:
+    iny
+    jmp @inner
+
+@outer_next:
+    inx
+    cpx #MAX_ENTITIES
+    bne @outer
     rts
 .endproc
 

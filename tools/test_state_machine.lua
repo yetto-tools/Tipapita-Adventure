@@ -31,6 +31,21 @@ for i = 1, 100 do
 		break
 	end
 end
+-- F5.2: pradera ahora tiene un perseguidor y un atacante a distancia
+-- activos desde que carga la habitación, que se mueven solos hacia
+-- Chiquito sin que el test les pida nada. Esta prueba es de la
+-- máquina de estados (F3.4), no de combate -- igual que el paso 5 ya
+-- aislaba la muerte del peligro (ver su comentario), se desactivan
+-- aquí TODAS las entidades para que ningún contacto/knockback de un
+-- enemigo interfiera con las transiciones que sí se están probando
+-- (confirmado real: sin este fix, el perseguidor alcanzaba a Chiquito
+-- durante la caída del paso 5 y el knockback lo sacaba del hueco antes
+-- de llegar a DEAD). tools/test_enemies.lua prueba el combate real.
+local ENTITY_ACTIVE = 0x0362
+for i = 0, 7 do
+	memory.writebyte(ENTITY_ACTIVE + i, 0)
+end
+
 local state0 = st()
 log(string.format("spawn: state=%d (esperado IDLE=0)", state0))
 local idle_ok = state0 == STATE_IDLE

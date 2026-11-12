@@ -187,6 +187,13 @@ chiquito_pose_pal_lo:
 chiquito_pose_pal_hi:
     .byte >chiquito_idle_pal, >chiquito_walk1_pal, >chiquito_walk2_pal, >chiquito_run_pal, >chiquito_jump_pal
 
+; F5.2: desplazamiento de Y hacia arriba, por frame, durante los
+; primeros 16 frames del ciclo de salto del perseguidor
+; (ENEMY_CHASER_HOP_PERIOD); los 16 frames restantes del ciclo no usan
+; la tabla (reposa en el piso, offset 0). Pico de 8px a mitad del arco.
+enemy_hop_offset:
+    .byte 0,1,3,5,6,7,8,8,8,8,7,6,5,3,1,0
+
 ; Hitbox del jugador (definida en F2.3, usada desde F3.3). Un sprite de
 ; 8x8 completo, sin margen todavía.
 PLAYER_HITBOX_W = 8
@@ -305,6 +312,73 @@ TILE_SWITCH_PRESSED = 3   ; T_GROUND_FILL de tiles_pradera (ver tools/map2scene.
 MAX_ENTITIES = 8
 ENTITY_TYPE_ENEMY = 0
 ENTITY_TYPE_ITEM  = 1
+; F5.2: una entidad más, para los proyectiles del enemigo de ataque a
+; distancia -- reusa toda la infraestructura de F5.1 (SoA, límite de 8,
+; dibujado genérico en update_entities) en vez de un sistema aparte.
+ENTITY_TYPE_PROJECTILE = 2
+
+; F5.2 (enemigos básicos). entity_behavior solo se lee cuando
+; entity_type=ENTITY_TYPE_ENEMY (un ítem/proyectil no tiene IA). Mismo
+; hitbox 8x8 que el jugador para el chequeo de contacto (nombre propio
+; en vez de reusar PLAYER_HITBOX_* porque conceptualmente son cosas
+; distintas, aunque el valor coincida).
+ENEMY_BEHAVIOR_PATROL = 0
+ENEMY_BEHAVIOR_CHASER = 1
+ENEMY_BEHAVIOR_RANGED = 2
+ENTITY_HITBOX_W = 8
+ENTITY_HITBOX_H = 8
+
+; Enemigo patrullero: un solo ejemplo hardcodeado (mismo patrón que
+; PLATFORM_MIN_X/MAX_X), rebota 1px cada 2 frames dentro del tramo de
+; piso sólido de la pantalla 0, antes del hueco en columnas 13-14
+; (208-224px) -- MAX_X=200 deja margen para que el sprite de 8px no se
+; dibuje nunca sobre el hueco.
+ENEMY_PATROL_MIN_X = 160
+ENEMY_PATROL_MAX_X = 200
+ENEMY_PATROL_SPEED_DIVISOR = %00000001
+
+; Enemigo perseguidor/saltador: vive en la pantalla 1 (piso sólido
+; corrido, sin huecos ni peligros -- ver assets/maps/pradera.txt),
+; persigue a Chiquito en X de verdad (no un rango fijo) hasta quedar a
+; ENTITY_HITBOX_W de distancia, y agrega un salto visual periódico
+; (offset de Y, ver enemy_hop_offset) para que sea un comportamiento
+; realmente distinto del patrullero y no solo otra posición.
+ENEMY_CHASER_SPAWN_X = 380
+; 152 = altura real de "parado sobre el piso" en pradera (160 de tope
+; del suelo - 8 del hitbox -- mismo valor que SCENE_PRADERA_SPAWN_Y).
+; F2.3 había dejado el enemigo/ítem de prueba con Y arbitrarios (179,
+; 99) porque eran puramente decorativos, sin colisión real contra
+; nada; con el contacto jugador-enemigo real de F5.2 (check_enemy_
+; contact), un enemigo "parado en el piso" tiene que usar la MISMA
+; convención de Y que el jugador (tope del hitbox) para que tocarlo
+; de verdad funcione -- confirmado real: con 179 (27px más abajo que
+; donde el jugador puede pararse) el contacto nunca se disparaba en
+; juego normal, solo se podía provocar tele transportando al jugador
+; dentro del piso sólido.
+ENEMY_CHASER_BASE_Y  = 152
+ENEMY_CHASER_HOP_PERIOD = 32   ; 16 frames de salto (tabla) + 16 de reposo en el piso
+; Distancia a la que el perseguidor deja de acercarse -- A PROPÓSITO
+; más grande que ENTITY_HITBOX_W (el umbral de contacto/daño real de
+; check_enemy_contact). Si fueran el mismo valor, el perseguidor
+; quedaría parado justo en el borde del hitbox del jugador: en cuanto
+; termina la invulnerabilidad de HURT, el contacto se dispara de nuevo
+; de inmediato (confirmado real con tools/test_enemies.lua antes de
+; este margen). Con 12 > 8 queda parado claramente afuera del rango de
+; daño -- hace falta que el jugador avance para que lo toque.
+ENEMY_CHASER_STOP_DISTANCE = 12
+
+; Enemigo de ataque a distancia: fijo en X, también en la pantalla 1.
+; Cada ENEMY_RANGED_FIRE_COOLDOWN frames dispara un proyectil horizontal
+; hacia el lado donde esté Chiquito en ese instante -- el proyectil NO
+; vuelve a apuntar después de salir (ver projectile_step). El
+; proyectil desaparece solo (temporizador, no por salir de pantalla) y
+; el atacante puede disparar otro al terminar el cooldown -- la regla
+; de aparición/desaparición que pide F5.2.
+ENEMY_RANGED_SPAWN_X = 460
+ENEMY_RANGED_Y = 152   ; misma altura real de piso que ENEMY_CHASER_BASE_Y, ver la nota ahí
+ENEMY_RANGED_FIRE_COOLDOWN = 90
+PROJECTILE_SPEED = 2
+PROJECTILE_LIFETIME = 60
 
 ; Distribución del buffer de OAM: sprites 0-7 = entidades; sprites 8-9 =
 ; plataforma móvil; sprites 10-25 = Chiquito (F5.1c: 16 piezas, grilla
@@ -572,6 +646,21 @@ entity_arg_attr: .res 1
 chiquito_tile_ptr: .res 2
 chiquito_pal_ptr:  .res 2
 
+; F5.2: argumentos extra de spawn_entity (comportamiento/dirección/
+; temporizador inicial, ver la nota junto a entity_arg_room) y
+; escratch de las rutinas de IA de enemigos (compute_entity_dx,
+; enemy_chaser_step, enemy_ranged_step). Al final del segmento por la
+; misma razón documentada arriba de chiquito_tile_ptr: no correr las
+; direcciones de las variables anteriores, que varios tools/test_*.lua
+; ya tienen hardcodeadas.
+entity_arg_behavior: .res 1
+entity_arg_dir:      .res 1
+entity_arg_timer:    .res 1
+enemy_dx_lo:   .res 1   ; salida de compute_entity_dx (dx = entity_x - player_x, 16 bits con signo)
+enemy_dx_hi:   .res 1
+enemy_hop_tmp: .res 1   ; escratch de enemy_chaser_step, no usar en otro lado
+enemy_save_x:  .res 1   ; guarda el índice de entidad (X) mientras enemy_ranged_step llama a spawn_entity (que usa X desde 0)
+
 .segment "BSS"
 ppu_queue_len:       .res 1
 ppu_queue_overflow:  .res 1                      ; contador de escrituras descartadas por cola llena
@@ -621,6 +710,22 @@ npc_draw_y:     .res 1   ; origen Y de pantalla del metasprite (24px sobre el hi
 npc_row:        .res 1   ; fila 0-3 dentro de la grilla 4x4 del metasprite (bucle de dibujo)
 npc_col:        .res 1   ; columna 0-3 dentro de la grilla 4x4 (bucle de dibujo)
 npc_row4:       .res 1   ; npc_row*4, recalculado una vez por fila
+
+; F5.2: sub-comportamiento de IA (ENEMY_BEHAVIOR_*, solo se lee cuando
+; entity_type=ENTITY_TYPE_ENEMY), dirección actual (0=derecha,
+; 1=izquierda -- mismo criterio que platform_dir/npc_facing; para un
+; proyectil es la dirección de vuelo, fija desde que se dispara) y un
+; temporizador genérico cuyo significado depende del comportamiento:
+; fase del ciclo de salto (perseguidor, cuenta HACIA ARRIBA y da la
+; vuelta), cooldown de disparo (atacante a distancia, cuenta hacia
+; abajo) o vida restante (proyectil, cuenta hacia abajo). Al final del
+; segmento BSS por la misma razón que chiquito_tile_ptr en ZEROPAGE:
+; no correr las direcciones de entity_active..entity_attr ni de
+; player_row/npc_* que tools/test_entities.lua y otros ya tienen
+; hardcodeadas.
+entity_behavior: .res MAX_ENTITIES
+entity_dir:      .res MAX_ENTITIES
+entity_timer:    .res MAX_ENTITIES
 
 .segment "OAM"
 oam_buffer: .res 256  ; página $0200-$02FF, fuente de la OAM DMA ($4014)
@@ -818,6 +923,8 @@ mainloop:
     jsr update_player        ; F3.2: física + escribe posición/tile/flip al OAM
     jsr update_camera_and_streaming ; F4.2: cámara + streaming de pantallas
     jsr update_platform      ; F4.4: mueve la plataforma y escribe su OAM
+    jsr update_enemies       ; F5.2: IA de enemigos + movimiento/vida de proyectiles
+    jsr check_enemy_contact  ; F5.2: daño por contacto con enemigo/proyectil (HURT, igual que un peligro de tile)
     jsr update_entities      ; F5.1: escribe el OAM de las entidades activas de la habitación actual
     jsr update_npc           ; F5.1b: patrulla y OAM de Sanchopau (solo visible en Casa)
 
@@ -1562,29 +1669,7 @@ mainloop:
     bne @hazard_skip
 
 @hazard_hit:
-    lda #STATE_HURT
-    sta player_state
-    lda #HURT_DURATION
-    sta state_timer
-    lda #0
-    sta player_on_ground
-    lda player_facing_right
-    bne @knockback_left
-    lda #<KNOCKBACK_VX
-    sta player_vx_lo
-    lda #>KNOCKBACK_VX
-    sta player_vx_hi
-    jmp @knockback_vy
-@knockback_left:
-    lda #<NEG_KNOCKBACK_VX
-    sta player_vx_lo
-    lda #>NEG_KNOCKBACK_VX
-    sta player_vx_hi
-@knockback_vy:
-    lda #<KNOCKBACK_VY
-    sta player_vy_lo
-    lda #>KNOCKBACK_VY
-    sta player_vy_hi
+    jsr enter_hurt_state
 
 @hazard_skip:
     ; --- Puerta (F4.3): si alguna de las dos esquinas de abajo del
@@ -1817,6 +1902,39 @@ mainloop:
     bne @blink_hide_loop
 @no_blink:
 
+    rts
+.endproc
+
+; Entra en HURT con knockback real (F3.4, factorizado de update_player
+; en F5.2 para que check_enemy_contact pueda disparar el mismo estado
+; sin duplicar código -- el knockback de un peligro de tile y el de un
+; enemigo/proyectil son indistinguibles para el jugador). El knockback
+; sigue basado en player_facing_right, no en la posición relativa de lo
+; que golpeó -- mismo criterio que ya usaba el peligro de tile.
+.proc enter_hurt_state
+    lda #STATE_HURT
+    sta player_state
+    lda #HURT_DURATION
+    sta state_timer
+    lda #0
+    sta player_on_ground
+    lda player_facing_right
+    bne @knockback_left
+    lda #<KNOCKBACK_VX
+    sta player_vx_lo
+    lda #>KNOCKBACK_VX
+    sta player_vx_hi
+    jmp @knockback_vy
+@knockback_left:
+    lda #<NEG_KNOCKBACK_VX
+    sta player_vx_lo
+    lda #>NEG_KNOCKBACK_VX
+    sta player_vx_hi
+@knockback_vy:
+    lda #<KNOCKBACK_VY
+    sta player_vy_lo
+    lda #>KNOCKBACK_VY
+    sta player_vy_hi
     rts
 .endproc
 
@@ -2090,9 +2208,13 @@ mainloop:
 
     lda room_current
     cmp #ROOM_PRADERA
-    bne @no_entities
-    ; Enemigo de prueba (F2.3, ahora una entidad real -- misma posición
-    ; y tile de siempre, sin IA todavía, eso es F5.2).
+    beq @has_entities
+    jmp @no_entities            ; bucle de spawns más largo que 127 bytes: branch corto + jmp (patrón ya usado en update_player)
+@has_entities:
+    ; Enemigo patrullero (F2.3 lo creó estático; F5.2 le da IA real --
+    ; ver enemy_patrol_step). Misma X de siempre; Y corregida de 179 a
+    ; 152 (altura real de piso, ver la nota junto a ENEMY_CHASER_BASE_Y)
+    ; para que check_enemy_contact pueda tocarlo de verdad caminando.
     lda #ROOM_PRADERA
     sta entity_arg_room
     lda #ENTITY_TYPE_ENEMY
@@ -2101,14 +2223,20 @@ mainloop:
     sta entity_arg_x_lo
     lda #>180
     sta entity_arg_x_hi
-    lda #179
+    lda #152
     sta entity_arg_y
     lda #TILE_ENEMY
     sta entity_arg_tile
     lda #%00000001
     sta entity_arg_attr
+    lda #ENEMY_BEHAVIOR_PATROL
+    sta entity_arg_behavior
+    lda #0
+    sta entity_arg_dir
+    sta entity_arg_timer
     jsr spawn_entity
-    ; Coleccionable de prueba (F2.3, idem).
+    ; Coleccionable de prueba (F2.3, idem). Sin comportamiento --
+    ; entity_arg_behavior/dir/timer quedan en 0 sin que nada los lea.
     lda #ROOM_PRADERA
     sta entity_arg_room
     lda #ENTITY_TYPE_ITEM
@@ -2123,6 +2251,58 @@ mainloop:
     sta entity_arg_tile
     lda #%00000010
     sta entity_arg_attr
+    lda #0
+    sta entity_arg_behavior
+    sta entity_arg_dir
+    sta entity_arg_timer
+    jsr spawn_entity
+    ; Enemigo perseguidor/saltador (F5.2): pantalla 1, piso sólido
+    ; corrido. Arranca mirando/moviendo a la derecha (dir=0); el primer
+    ; frame real de IA (enemy_chaser_step) corrige la dirección según
+    ; dónde esté Chiquito.
+    lda #ROOM_PRADERA
+    sta entity_arg_room
+    lda #ENTITY_TYPE_ENEMY
+    sta entity_arg_type
+    lda #<ENEMY_CHASER_SPAWN_X
+    sta entity_arg_x_lo
+    lda #>ENEMY_CHASER_SPAWN_X
+    sta entity_arg_x_hi
+    lda #ENEMY_CHASER_BASE_Y
+    sta entity_arg_y
+    lda #TILE_ENEMY
+    sta entity_arg_tile
+    lda #%00000001
+    sta entity_arg_attr
+    lda #ENEMY_BEHAVIOR_CHASER
+    sta entity_arg_behavior
+    lda #0
+    sta entity_arg_dir
+    sta entity_arg_timer
+    jsr spawn_entity
+    ; Enemigo de ataque a distancia (F5.2): pantalla 1, fijo en X.
+    ; entity_timer arranca en ENEMY_RANGED_FIRE_COOLDOWN (no en 0) para
+    ; que no dispare en el primer frame tras cargar la habitación.
+    lda #ROOM_PRADERA
+    sta entity_arg_room
+    lda #ENTITY_TYPE_ENEMY
+    sta entity_arg_type
+    lda #<ENEMY_RANGED_SPAWN_X
+    sta entity_arg_x_lo
+    lda #>ENEMY_RANGED_SPAWN_X
+    sta entity_arg_x_hi
+    lda #ENEMY_RANGED_Y
+    sta entity_arg_y
+    lda #TILE_ENEMY
+    sta entity_arg_tile
+    lda #%00000001
+    sta entity_arg_attr
+    lda #ENEMY_BEHAVIOR_RANGED
+    sta entity_arg_behavior
+    lda #0
+    sta entity_arg_dir
+    lda #ENEMY_RANGED_FIRE_COOLDOWN
+    sta entity_arg_timer
     jsr spawn_entity
 @no_entities:
 
@@ -2514,6 +2694,12 @@ mainloop:
     sta entity_tile,x
     lda entity_arg_attr
     sta entity_attr,x
+    lda entity_arg_behavior
+    sta entity_behavior,x
+    lda entity_arg_dir
+    sta entity_dir,x
+    lda entity_arg_timer
+    sta entity_timer,x
     rts
 .endproc
 
@@ -2580,6 +2766,358 @@ mainloop:
     inx
     cpx #MAX_ENTITIES
     bne @loop
+    rts
+.endproc
+
+; F5.2: dx = entity_x(X) - player_x_px, 16 bits con signo, en
+; enemy_dx_lo/hi. X = índice de entidad al entrar (no se modifica).
+; Primitiva compartida por enemy_chaser_step, enemy_ranged_step y
+; check_enemy_contact -- el signo (bit 7 de enemy_dx_hi) da la
+; dirección hacia el jugador sin importar la distancia; la magnitud
+; solo es exacta para comparaciones de umbral chico (ver cada llamador).
+.proc compute_entity_dx
+    lda entity_x_lo,x
+    sec
+    sbc player_x_px_lo
+    sta enemy_dx_lo
+    lda entity_x_hi,x
+    sbc player_x_px_hi
+    sta enemy_dx_hi
+    rts
+.endproc
+
+; F5.2: colisión jugador-enemigo/proyectil. AABB simple entre el
+; hitbox de Chiquito (8x8, player_x_px/player_y_hi) y cada entidad
+; ACTIVA de tipo ENEMY o PROJECTILE en la habitación actual. En el
+; primer contacto que encuentra entra en HURT (enter_hurt_state, mismo
+; knockback que un peligro de tile) y sale -- no hace falta seguir
+; revisando el resto de entidades ese mismo frame, el jugador ya queda
+; invulnerable. Si el contacto fue con un proyectil, además lo
+; desactiva (una "bala" se consume al pegar). El jugador NO puede
+; dañar a los enemigos todavía -- no hay arma/hitbox de ataque real
+; (eso es F5.3); este chequeo es de un solo sentido.
+.proc check_enemy_contact
+    lda player_state
+    cmp #STATE_HURT
+    beq @done
+    cmp #STATE_DEAD
+    beq @done
+
+    ldx #0
+@loop:
+    lda entity_active,x
+    beq @next
+    lda entity_room,x
+    cmp room_current
+    bne @next
+    lda entity_type,x
+    cmp #ENTITY_TYPE_ENEMY
+    beq @check
+    cmp #ENTITY_TYPE_PROJECTILE
+    bne @next
+@check:
+    jsr compute_entity_dx
+    lda enemy_dx_hi
+    beq @dx_check_pos
+    cmp #$FF
+    bne @next
+    lda enemy_dx_lo
+    cmp #(256-ENTITY_HITBOX_W)
+    bcc @next
+    jmp @dx_ok
+@dx_check_pos:
+    lda enemy_dx_lo
+    cmp #ENTITY_HITBOX_W
+    bcs @next
+@dx_ok:
+    ; dy = entity_y(X) - player_y_hi, 8 bits con signo; abs(dy) < ENTITY_HITBOX_H.
+    lda entity_y,x
+    sec
+    sbc player_y_hi
+    bpl @dy_check
+    eor #$FF
+    clc
+    adc #1
+@dy_check:
+    cmp #ENTITY_HITBOX_H
+    bcs @next
+    ; Contacto real.
+    lda entity_type,x
+    cmp #ENTITY_TYPE_PROJECTILE
+    bne @hit
+    lda #0
+    sta entity_active,x
+@hit:
+    jsr enter_hurt_state
+    rts
+@next:
+    inx
+    cpx #MAX_ENTITIES
+    bne @loop
+@done:
+    rts
+.endproc
+
+; F5.2: IA de enemigos (patrullero/perseguidor-saltador/ataque a
+; distancia) y movimiento/vida de proyectiles. Llamado una vez por
+; frame desde el main loop, ANTES de update_entities, para que los
+; cambios de posición/atributo de este frame ya estén en la tabla
+; cuando update_entities escriba el OAM. Solo procesa entidades
+; ACTIVAS de la habitación actual -- las de otras habitaciones ni se
+; tocan (igual que el resto del sistema de entidades, por zona).
+.proc update_enemies
+    ldx #0
+@loop:
+    lda entity_active,x
+    beq @next
+    lda entity_room,x
+    cmp room_current
+    bne @next
+    lda entity_type,x
+    cmp #ENTITY_TYPE_ENEMY
+    beq @is_enemy
+    cmp #ENTITY_TYPE_PROJECTILE
+    beq @do_projectile
+    jmp @next
+@is_enemy:
+    lda entity_behavior,x
+    cmp #ENEMY_BEHAVIOR_PATROL
+    beq @do_patrol
+    cmp #ENEMY_BEHAVIOR_CHASER
+    beq @do_chaser
+    cmp #ENEMY_BEHAVIOR_RANGED
+    beq @do_ranged
+    jmp @next
+@do_patrol:
+    jsr enemy_patrol_step
+    jmp @next
+@do_chaser:
+    jsr enemy_chaser_step
+    jmp @next
+@do_ranged:
+    jsr enemy_ranged_step
+    jmp @next
+@do_projectile:
+    jsr projectile_step
+@next:
+    inx
+    cpx #MAX_ENTITIES
+    bne @loop
+    rts
+.endproc
+
+; Patrullero (F5.2): rebota 1px cada 2 frames entre ENEMY_PATROL_MIN_X/
+; MAX_X -- mismo patrón que update_platform, pero por entidad (el rango
+; cabe en 8 bits, a diferencia del perseguidor/atacante que viven más
+; lejos en el nivel). X = índice de entidad al entrar.
+.proc enemy_patrol_step
+    lda frame_count
+    and #ENEMY_PATROL_SPEED_DIVISOR
+    bne @flip_only
+    lda entity_dir,x
+    bne @move_left
+@move_right:
+    inc entity_x_lo,x
+    lda entity_x_lo,x
+    cmp #ENEMY_PATROL_MAX_X
+    bcc @flip_only
+    lda #1
+    sta entity_dir,x
+    jmp @flip_only
+@move_left:
+    dec entity_x_lo,x
+    lda entity_x_lo,x
+    cmp #ENEMY_PATROL_MIN_X
+    bcs @flip_only
+    lda #0
+    sta entity_dir,x
+@flip_only:
+    lda #%00000001            ; subpaleta de enemigo, igual que en el spawn
+    ldy entity_dir,x
+    beq @attr_store
+    ora #%01000000            ; dir=1 (izquierda) -> flip horizontal
+@attr_store:
+    sta entity_attr,x
+    rts
+.endproc
+
+; Perseguidor/saltador (F5.2): se mueve 1px/frame en X hacia Chiquito
+; (persecución real, no un rango fijo) hasta quedar a ENTITY_HITBOX_W
+; de distancia -- el mismo umbral que usa check_enemy_contact para el
+; contacto, no hace falta superponerse para "llegar". Agrega un salto
+; visual (offset de Y vía enemy_hop_offset) en vez de deslizarse, para
+; que sea un comportamiento realmente distinto del patrullero. Sin
+; física de salto real por entidad (gravedad/colisión) -- es un offset
+; de dibujo sobre ENEMY_CHASER_BASE_Y, ver limitaciones en TASKS.md.
+.proc enemy_chaser_step
+    jsr compute_entity_dx
+
+    ; Dirección real hacia el jugador (válida a cualquier distancia):
+    ; bit 7 de enemy_dx_hi. dx<0 (entidad a la izquierda) -> dir=0
+    ; (derecha); dx>=0 -> dir=1 (izquierda). Mismo criterio que
+    ; platform_dir/entity_dir del patrullero (0=derecha).
+    lda enemy_dx_hi
+    bmi @face_right
+    lda #1
+    sta entity_dir,x
+    jmp @dir_done
+@face_right:
+    lda #0
+    sta entity_dir,x
+@dir_done:
+
+    ; ¿Ya está a menos de ENEMY_CHASER_STOP_DISTANCE de distancia? Esta
+    ; aproximación (comparar solo el byte bajo cuando el alto es 0 o
+    ; $FF) solo es exacta para |dx| chico, que es justo el caso que
+    ; importa: si el alto es otro valor, está lejos de verdad y debe
+    ; seguir acercándose sin entrar en ninguna de las dos ramas de abajo.
+    lda enemy_dx_hi
+    beq @maybe_close_pos
+    cmp #$FF
+    bne @do_move
+    lda enemy_dx_lo
+    cmp #(256-ENEMY_CHASER_STOP_DISTANCE)
+    bcs @skip_move
+    jmp @do_move
+@maybe_close_pos:
+    lda enemy_dx_lo
+    cmp #ENEMY_CHASER_STOP_DISTANCE
+    bcc @skip_move
+@do_move:
+    lda entity_dir,x
+    bne @move_left
+@move_right:
+    inc entity_x_lo,x
+    bne @skip_move
+    inc entity_x_hi,x
+    jmp @skip_move
+@move_left:
+    lda entity_x_lo,x
+    bne @dec_lo
+    dec entity_x_hi,x
+@dec_lo:
+    dec entity_x_lo,x
+@skip_move:
+
+    ; Ciclo de salto (F5.2): independiente de si se movió este frame.
+    ; entity_timer cuenta HACIA ARRIBA de 0 a ENEMY_CHASER_HOP_PERIOD-1
+    ; y vuelve a 0 -- distinto del uso como cooldown del atacante a
+    ; distancia (cuenta hacia abajo), mismo campo, significado por
+    ; comportamiento (ver la nota junto a entity_timer en BSS).
+    inc entity_timer,x
+    lda entity_timer,x
+    cmp #ENEMY_CHASER_HOP_PERIOD
+    bcc @hop_check
+    lda #0
+    sta entity_timer,x
+@hop_check:
+    lda entity_timer,x
+    cmp #16
+    bcs @on_ground
+    tay
+    lda enemy_hop_offset,y
+    jmp @apply_y
+@on_ground:
+    lda #0
+@apply_y:
+    sta enemy_hop_tmp
+    lda #ENEMY_CHASER_BASE_Y
+    sec
+    sbc enemy_hop_tmp
+    sta entity_y,x
+
+    lda #%00000001
+    ldy entity_dir,x
+    beq @attr_store
+    ora #%01000000
+@attr_store:
+    sta entity_attr,x
+    rts
+.endproc
+
+; Atacante a distancia (F5.2): fijo en X. entity_timer es el cooldown
+; (cuenta hacia abajo desde ENEMY_RANGED_FIRE_COOLDOWN); al llegar a 0
+; dispara un proyectil horizontal hacia el lado donde esté Chiquito en
+; ESE instante (no vuelve a apuntar después, ver projectile_step) y
+; reinicia el cooldown. X = índice de entidad al entrar -- se guarda en
+; enemy_save_x porque spawn_entity recorre la tabla de entidades desde
+; X=0 (lo pisa).
+.proc enemy_ranged_step
+    lda entity_timer,x
+    beq @fire
+    dec entity_timer,x
+    rts
+@fire:
+    jsr compute_entity_dx
+    lda enemy_dx_hi
+    bmi @dir_right              ; dx<0: jugador a la derecha -> bala a la derecha (dir=0)
+    lda #1                      ; dx>=0: jugador a la izquierda (o igual) -> bala a la izquierda (dir=1)
+    jmp @dir_have
+@dir_right:
+    lda #0
+@dir_have:
+    sta entity_arg_dir
+
+    stx enemy_save_x
+    lda room_current
+    sta entity_arg_room
+    lda #ENTITY_TYPE_PROJECTILE
+    sta entity_arg_type
+    lda entity_x_lo,x
+    sta entity_arg_x_lo
+    lda entity_x_hi,x
+    sta entity_arg_x_hi
+    lda entity_y,x
+    sta entity_arg_y
+    lda #TILE_ITEM               ; sin arte dedicado todavía -- ver limitaciones en TASKS.md/ASSET_MANIFEST.md
+    sta entity_arg_tile
+    lda #%00000001
+    sta entity_arg_attr
+    lda #0
+    sta entity_arg_behavior
+    lda #PROJECTILE_LIFETIME
+    sta entity_arg_timer
+    jsr spawn_entity
+    ldx enemy_save_x
+
+    lda #ENEMY_RANGED_FIRE_COOLDOWN
+    sta entity_timer,x
+    rts
+.endproc
+
+; Movimiento y ciclo de vida de un proyectil (F5.2): viaja en línea
+; recta (PROJECTILE_SPEED px/frame) en la dirección fijada al
+; disparar (entity_dir, no vuelve a apuntar); entity_timer cuenta
+; PROJECTILE_LIFETIME frames hacia abajo y lo desactiva al llegar a 0
+; -- desaparición real, no solo salir de pantalla. El atacante a
+; distancia dispara uno nuevo al terminar su propio cooldown (ver
+; enemy_ranged_step) -- no es el MISMO proyectil reapareciendo, pero
+; cumple la regla de aparición/desaparición que pide F5.2.
+.proc projectile_step
+    dec entity_timer,x
+    bne @move
+    lda #0
+    sta entity_active,x
+    rts
+@move:
+    lda entity_dir,x
+    bne @move_left
+@move_right:
+    lda entity_x_lo,x
+    clc
+    adc #PROJECTILE_SPEED
+    sta entity_x_lo,x
+    bcc @rts
+    inc entity_x_hi,x
+    jmp @rts
+@move_left:
+    lda entity_x_lo,x
+    sec
+    sbc #PROJECTILE_SPEED
+    sta entity_x_lo,x
+    bcs @rts
+    dec entity_x_hi,x
+@rts:
     rts
 .endproc
 

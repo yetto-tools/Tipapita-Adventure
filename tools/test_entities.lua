@@ -1,8 +1,13 @@
 -- Prueba de humo para F5.1 (sistema de entidades).
 -- Verifica, de forma automatizada, contra el mapa/ROM real:
---   1. La habitación inicial (pradera) genera exactamente 2 entidades
---      reales (el enemigo/ítem de prueba de F2.3, migrados), con los
---      campos correctos.
+--   1. La habitación inicial (pradera) genera exactamente 4 entidades
+--      reales (enemigo patrullero + ítem de F2.3, migrados, más los
+--      enemigos perseguidor y de ataque a distancia de F5.2), con los
+--      campos correctos. El patrullero y el perseguidor tienen IA real
+--      desde F5.2 y se mueven solos -- esta prueba solo verifica su
+--      posición INICIAL (antes de que el main loop corra ningún
+--      frame), no una posición fija en el tiempo. El comportamiento en
+--      movimiento se prueba en tools/test_enemies.lua.
 --   2. Zona: al cambiar de habitación, esas entidades siguen activas
 --      en la tabla (no se destruyen) pero quedan ocultas en VRAM
 --      (fuera de la habitación actual no se dibujan).
@@ -29,6 +34,8 @@ local ENTITY_TYPE_ENEMY, ENTITY_TYPE_ITEM = 0, 1
 -- fiel del concept art), corriendo estos índices otra vez -- ver
 -- TILE_ENEMY/TILE_ITEM en src/main.s.
 local TILE_ENEMY, TILE_ITEM = 75, 76
+-- F5.2: 4 entidades en pradera, no 2 -- ver TILE_ENEMY arriba.
+local EXPECTED_ENTITY_COUNT = 4
 
 local out = io.open("/tmp/fceux_test_entities.txt", "w")
 local function log(line)
@@ -73,21 +80,32 @@ for _ = 1, 100 do
 	end
 end
 
--- 1) Pradera genera exactamente 2 entidades, con los campos correctos.
+-- 1) Pradera genera exactamente 4 entidades, con los campos correctos.
+-- El enemigo (patrullero, F5.2) ya se movió solo durante el bucle de
+-- asentamiento de arriba -- a diferencia del ítem (sin IA, posición
+-- fija), su X ya no es un valor exacto. Se verifica que sigue dentro
+-- de su rango de patrulla (160-200, ver ENEMY_PATROL_MIN_X/MAX_X en
+-- src/main.s), un invariante válido sin importar cuántos frames hayan
+-- corrido. find_by_type(ENEMY) sigue devolviendo este slot de forma
+-- confiable porque load_room lo genera PRIMERO, antes del perseguidor
+-- y el atacante a distancia (ver el orden de spawn_entity en
+-- load_room) -- es el enemigo de menor índice siempre que no haya
+-- entidades previas en la tabla.
 local active_count = count_active()
 local enemy_slot = find_by_type(ENTITY_TYPE_ENEMY)
 local item_slot = find_by_type(ENTITY_TYPE_ITEM)
+local enemy_x = enemy_slot ~= nil and memory.readbyte(ENTITY_X_LO + enemy_slot) or -1
 local enemy_ok = enemy_slot ~= nil
 	and memory.readbyte(ENTITY_ROOM + enemy_slot) == ROOM_PRADERA
-	and memory.readbyte(ENTITY_X_LO + enemy_slot) == 180
-	and memory.readbyte(ENTITY_Y + enemy_slot) == 179
+	and enemy_x >= 160 and enemy_x <= 200
+	and memory.readbyte(ENTITY_Y + enemy_slot) == 152
 	and memory.readbyte(ENTITY_TILE + enemy_slot) == TILE_ENEMY
 local item_ok = item_slot ~= nil
 	and memory.readbyte(ENTITY_ROOM + item_slot) == ROOM_PRADERA
 	and memory.readbyte(ENTITY_X_LO + item_slot) == 140
 	and memory.readbyte(ENTITY_Y + item_slot) == 99
 	and memory.readbyte(ENTITY_TILE + item_slot) == TILE_ITEM
-local spawn_ok = active_count == 2 and enemy_ok and item_ok
+local spawn_ok = active_count == EXPECTED_ENTITY_COUNT and enemy_ok and item_ok
 log(string.format(
 	"spawn_pradera: activas=%d enemigo_slot=%s item_slot=%s enemigo_ok=%s item_ok=%s",
 	active_count, tostring(enemy_slot), tostring(item_slot), tostring(enemy_ok), tostring(item_ok)
@@ -95,8 +113,8 @@ log(string.format(
 
 -- OAM del enemigo (slot*4 + ENTITY_OAM_BASE), con cámara en 0 al arrancar.
 local enemy_oam_y = memory.readbyte(0x0200 + ENTITY_OAM_BASE + enemy_slot * 4)
-local oam_visible_ok = enemy_oam_y == 179
-log(string.format("oam_enemigo_visible: y=%d (esperado 179)", enemy_oam_y))
+local oam_visible_ok = enemy_oam_y == 152
+log(string.format("oam_enemigo_visible: y=%d (esperado 152)", enemy_oam_y))
 
 -- 2) Cambia de habitación: las entidades de pradera siguen activas
 --    pero su OAM queda oculto (Y=$FF) por zona.
@@ -123,10 +141,10 @@ for _ = 1, 10 do
 end
 local back_in_pradera = memory.readbyte(ROOM_CURRENT) == ROOM_PRADERA
 local active_after_return = count_active()
-local no_duplicate_ok = back_in_pradera and active_after_return == 2
+local no_duplicate_ok = back_in_pradera and active_after_return == EXPECTED_ENTITY_COUNT
 log(string.format(
-	"sin_duplicar_al_volver: en_pradera=%s activas=%d (esperado 2)",
-	tostring(back_in_pradera), active_after_return
+	"sin_duplicar_al_volver: en_pradera=%s activas=%d (esperado %d)",
+	tostring(back_in_pradera), active_after_return, EXPECTED_ENTITY_COUNT
 ))
 
 -- 4) Límite/seguridad: llena las 8 entidades con centinelas de una

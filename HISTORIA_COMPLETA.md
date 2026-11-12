@@ -1,5 +1,5 @@
 # HISTORIA COMPLETA
-## Tipapita Adventure
+## Tipapita-Adventure
 
 ## Prólogo — Un hogar entre las montañas
 

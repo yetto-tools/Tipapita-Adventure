@@ -1,5 +1,5 @@
 # ART GUIDELINES
-## Tipapita Adventure
+## Tipapita-Adventure
 
 ## 1. Dirección artística
 
@@ -13,6 +13,24 @@ La identidad visual debe transmitir:
 - Humor.
 - Misterio.
 - Calidez familiar.
+
+### Referencia técnica confirmada: Kirby's Adventure (NES)
+
+Usar *Kirby's Adventure* únicamente como referencia de nivel de oficio en NES:
+personajes que llenan su caja lógica, contornos legibles, animación expresiva,
+paletas claras, fondos con sensación de profundidad y variación visual entre
+regiones. No copiar personajes, enemigos, habilidades, tiles, composiciones,
+interfaces, escenarios ni layouts del juego de referencia.
+
+- Chiquito usa una caja lógica base de **16×16 px**, formada por 4 tiles de 8×8.
+- La silueta debe ocupar aproximadamente 14–16 px de la caja; evitar que el
+  personaje se perciba como un sprite de 8×8 rodeado de espacio vacío.
+- Personajes especiales, jefes y efectos pueden superar 16×16 si el presupuesto
+  OAM y el límite de 8 sprites por scanline se miden en escenas reales.
+- Los fondos deben organizarse en tres bandas visuales: silueta distante,
+  decoración media y primer plano con colisión claramente legible.
+- La profundidad se simula con contraste, densidad de línea, paletas y scrolling;
+  NES no dispone de capas modernas libres ni transparencia alfa.
 
 Las referencias a juegos clásicos sirven únicamente como inspiración de ritmo, exploración y calidad artística. No copiar personajes, sprites, escenarios, interfaces ni recursos protegidos.
 

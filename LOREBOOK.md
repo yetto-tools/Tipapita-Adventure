@@ -1,4 +1,4 @@
-# LOREBOOK — Tipapita Adventure
+# LOREBOOK — Tipapita-Adventure
 
 ## 1. El universo
 

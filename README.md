@@ -1,4 +1,4 @@
-# Tipapita Adventure
+# Tipapita-Adventure
 
 ## Descripción
 
@@ -22,10 +22,11 @@ El juego combina exploración, plataformas, combate, recolección de recursos, a
 | Archivo | Contenido |
 |---|---|
 | CLAUDE.md | Reglas e instrucciones de trabajo para el asistente |
-| GAME DESIGN DOCUMENT.md | Visión y diseño del juego completo |
+| GAME_DESIGN_DOCUMENT.md | Visión, identidad y diseño del juego completo |
 | LOREBOOK.md | Universo y personajes |
 | HISTORIA_COMPLETA.md | Historia y capítulos |
 | ART_GUIDELINES.md | Dirección artística |
+| assets/ASSET_MANIFEST.md | Fuentes, tiles, sprites, paletas y presupuesto OAM del pase visual actual |
 | ARCHITECTURE.md | Arquitectura técnica |
 | TASKS.md | Plan de desarrollo |
 
@@ -36,9 +37,14 @@ Requiere el toolchain de CC65 (`ca65`, `ld65`) y `python3`, instalados vía `apt
 ```sh
 make rom     # compila y enlaza dist/chiquito.nes, valida header/tamaño
 make check   # solo valida la ROM ya compilada
+make test    # ejecuta pruebas FCEUX invisibles dentro de Xvfb
 make run     # abre la ROM en FCEUX (requiere fceux instalado: sudo apt install fceux)
 make clean   # borra dist/
 ```
+
+`make test` usa `xvfb-run` y `SDL_AUDIODRIVER=dummy`, por lo que no muestra una
+ventana de FCEUX ni requiere audio. `make run` se conserva visible para revisión
+manual de gráficos y controles.
 
 La ROM se genera en `dist/chiquito.nes` (iNES, mapper 4 / MMC3, PRG-ROM 128 KB, CHR-ROM 128 KB — ver decisiones en `ARCHITECTURE.md`). `dist/` no se versiona (ver `.gitignore`).
 

@@ -29,12 +29,16 @@
 ; enemigo inicial y coleccionable, también generados vía
 ; tools/png2chr.py (assets/sprites/chiquito_test.png — igual de
 ; placeholder técnico que los tiles de pradera). Se agregan al mismo
-; segmento CHARS, justo después de los tiles de fondo, por lo que
-; terminan físicamente en los mismos bancos que R0-R5 ya exponen (ver
-; nota de mmc3_init_values): hoy pattern table 0 y pattern table 1
-; muestran los mismos bytes físicos de CHR-ROM porque ningún registro de
-; banco cambia todavía. Por eso los tiles de sprite, índices 5-8, caen
-; justo después de los 5 tiles de fondo (índices 0-4).
+; segmento CHARS, justo después de los tiles de fondo.
+;
+; F5.1b (CHR-ROM de fondo y sprites separados): lo anterior era cierto
+; solo mientras R0-R5 del MMC3 apuntaban los 6 al banco físico 0 (pattern
+; table de fondo y de sprites mostraban los mismos bytes, de ahí el +12
+; artificial en los índices TILE_CHIQUITO_*). Ahora R0/R1 fijan el fondo
+; en los primeros 4KB físicos y R2-R5 fijan los sprites en los
+; siguientes 4KB (align explícito antes de incluir los sprites) --
+; cada pattern table tiene sus 256 tiles propios, sin compartir bytes.
+; Ver la nota completa junto a mmc3_init_values y a los TILE_*.
 ;
 ; F3.1 (controlador): `read_controller1`, llamada una vez por frame
 ; desde el main loop, lee el mando 1 vía $4016 y normaliza 3 estados:
@@ -96,24 +100,92 @@
 .include "../dist/tiles_pradera.s"
 .include "../dist/scene_pradera.s"
 .include "../dist/scene_casa.s"
-.include "../dist/tiles_sprites.s"
 
-; Índices de tile de sprite (dentro de tiles_sprites, offset +8 porque
-; van después de los 8 tiles de fondo en el mismo CHR-ROM -- 5 de la
-; pradera + puerta (F4.3) + punto de control + interruptor (F4.4)).
-TILE_CHIQUITO_IDLE = 8
-TILE_CHIQUITO_WALK = 9
-TILE_ENEMY         = 10
-TILE_ITEM          = 11
+; F5.1b (reparto de CHR-ROM entre fondo y sprites): antes de esto, R0-R5
+; apuntaban los 6 al mismo banco físico 0, así que pattern table de fondo
+; ($0000-$0FFF) y de sprites ($1000-$1FFF) mostraban los mismos bytes
+; físicos y los tiles de sprite debían numerarse con un +12 artificial
+; para no pisar los 12 tiles de fondo. Con R0=$00/R1=$01 (banco 0/1, de
+; 2KB cada uno) el fondo tiene sus 4KB propios (256 tiles, de los cuales
+; solo 0-11 están en uso), y R2-R5=$04-$07 (bancos de 1KB) le dan a los
+; sprites otros 4KB propios, también 256 tiles, SIN compartir bytes con
+; el fondo. El `.align $1000` de abajo rellena con relleno ($00, sin
+; impacto visual porque nada referencia esos tiles) justo hasta ese
+; límite de 4KB para que los sprites empiecen exactamente donde R2-R5
+; esperan verlos. Ver mmc3_init_values. Confirmado sin regresión visual
+; corriendo tools/test_tiles.lua y tools/test_sprites.lua tras el cambio
+; (ver TASKS.md).
+.segment "CHARS"
+.align $1000
+; F5.1c: las 5 poses reales de Chiquito (conversión fiel del concept
+; art -- ver tools/gen_chiquito_poses.py), 75 tiles (0-74).
+.include "../dist/tiles_chiquito.s"
+; F2.3/F4.4: enemigo/ítem/plataforma de prueba, justo después (75-77).
+.include "../dist/tiles_scenery.s"
+; F5.1b: Sanchopau a continuación (78-93), dentro del mismo banco de 4KB
+; de sprites (94 de los 256 tiles disponibles ahí usados -- de sobra).
+; El resto del elenco (Mothman/Abuelito/Diablito/Marcianito, generados
+; por tools/gen_cast_sprites.py) no se incluye todavía: no tienen
+; habitación propia donde aparecer, así que mapearlos ahora solo
+; gastaría presupuesto de pattern table sin ningún uso real.
+.include "../dist/tiles_cast.s"
 
-; F4.4: la plataforma móvil reutiliza el tile de fondo T_PLATFORM (índice
-; 4 en tiles_pradera, el 5to tile del tileset) como sprite. Funciona
-; porque hoy los 6 registros de banco de CHR de MMC3 (R0-R5) apuntan
-; todos al mismo banco físico 0 (ver mmc3_init_values) -- pattern table
-; 0 (fondo) y pattern table 1 (sprites) muestran los mismos bytes de
-; CHR-ROM, así que el índice 4 es válido tanto de fondo como de sprite
-; sin necesitar un tile nuevo.
-TILE_PLATFORM_SPRITE = 4
+; F5.1c: por pose, qué tile ABSOLUTO (dentro de la pattern table de
+; sprites de arriba) y qué subpaleta de hardware (0 o 1) usa cada una de
+; las 16 celdas de la grilla 4x4 -- $FF en la tabla de tile significa
+; "sin tile real ahí, ocultar ese sprite" (las poses no siempre llenan
+; las 16 celdas). Generadas por tools/gen_chiquito_poses.py directo
+; desde el JSON de cada pose, no a mano.
+.include "../dist/chiquito_pose_tables.s"
+
+; Tiles de escenario (F2.3/F4.4), justo después de las 75 de Chiquito.
+TILE_ENEMY                 = 75
+TILE_ITEM                  = 76
+TILE_PLATFORM_SPRITE       = 77
+; Primer tile libre después de Chiquito/enemigo/ítem/plataforma,
+; disponible para el elenco nuevo (F5.1b).
+TILE_CAST_BASE             = 78
+
+; Sanchopau: 32x32 (4x4 tiles = 16), orden TL..BR por filas (mismo orden
+; que el JSON de nes_referencias: tile = (y/8)*4 + (x/8)). Pose única --
+; esa conversión fiel del concept art no trae caminar/salto dibujados
+; (a diferencia de Chiquito), así que Sanchopau se desliza con esta
+; misma pose en vez de animar piernas (ver update_npc). Rediseñar esas
+; poses a mano quedó peor que esta conversión directa -- ver el
+; registro de la tarea en TASKS.md.
+TILE_SANCHOPAU_BASE = TILE_CAST_BASE
+
+; F5.1c: identificadores de pose de Chiquito, para elegir qué par de
+; tablas (chiquito_<pose>_tile / _pal) usar en draw_player_metasprite.
+; No son los STATE_* de la máquina de estados: STATE_WALK se reparte
+; entre POSE_WALK1/WALK2/RUN según la velocidad real (ver @animate en
+; update_player), y STATE_JUMP/STATE_FALL comparten POSE_JUMP.
+POSE_IDLE  = 0
+POSE_WALK1 = 1
+POSE_WALK2 = 2
+POSE_RUN   = 3
+POSE_JUMP  = 4
+; Umbral de velocidad horizontal (valor absoluto, byte alto de punto
+; fijo 8.8) a partir del cual caminar pasa a correr. MOVE_MAX_SPEED es
+; $0180 (1.5px/frame); 1 de byte alto = 1px/frame entero, así que este
+; umbral son ~1.0px/frame -- con MOVE_ACCEL=$0020 tarda unos 0.5s en
+; alcanzarlo sosteniendo una dirección, suficiente para que se note la
+; transición caminar->correr en vez de ser instantánea.
+RUN_SPEED_THRESHOLD = 1
+
+; Punteros (lo/hi por separado, indexados por POSE_*) a las tablas
+; chiquito_<pose>_tile/_pal de dist/chiquito_pose_tables.s --
+; draw_player_metasprite los usa para cargar chiquito_tile_ptr/
+; chiquito_pal_ptr sin una cadena de 5 CMP/BEQ.
+.segment "RODATA"
+chiquito_pose_tile_lo:
+    .byte <chiquito_idle_tile, <chiquito_walk1_tile, <chiquito_walk2_tile, <chiquito_run_tile, <chiquito_jump_tile
+chiquito_pose_tile_hi:
+    .byte >chiquito_idle_tile, >chiquito_walk1_tile, >chiquito_walk2_tile, >chiquito_run_tile, >chiquito_jump_tile
+chiquito_pose_pal_lo:
+    .byte <chiquito_idle_pal, <chiquito_walk1_pal, <chiquito_walk2_pal, <chiquito_run_pal, <chiquito_jump_pal
+chiquito_pose_pal_hi:
+    .byte >chiquito_idle_pal, >chiquito_walk1_pal, >chiquito_walk2_pal, >chiquito_run_pal, >chiquito_jump_pal
 
 ; Hitbox del jugador (definida en F2.3, usada desde F3.3). Un sprite de
 ; 8x8 completo, sin margen todavía.
@@ -234,12 +306,34 @@ MAX_ENTITIES = 8
 ENTITY_TYPE_ENEMY = 0
 ENTITY_TYPE_ITEM  = 1
 
-; Distribución del buffer de OAM: sprite 0 = Chiquito; sprites 1-8
-; (offsets 4-35, 4 bytes cada uno) = entidades (MAX_ENTITIES); sprites
-; 9-10 (offsets 36-43) = plataforma móvil (F4.4, movida aquí para
-; dejarle espacio a las entidades).
+; Distribución del buffer de OAM: sprites 0-7 = entidades; sprites 8-9 =
+; plataforma móvil; sprites 10-25 = Chiquito (F5.1c: 16 piezas, grilla
+; 4x4, ya no 4 -- ver PLAYER_OAM_BASE). Se mantiene ENTITY_OAM_BASE=4
+; para no alterar el contrato del sistema de entidades.
 ENTITY_OAM_BASE   = 4
 PLATFORM_OAM_BASE = ENTITY_OAM_BASE + MAX_ENTITIES * 4
+
+; F5.1c: Chiquito pasó de 4 piezas (16x16) a 16 (32x32, conversión fiel
+; del concept art) -- ya no tiene sentido mantener "sprite 0 aparte +
+; 3 extra" como quedó de cuando solo eran 4; ahora es un bloque propio
+; de 16 sprites (64 bytes), igual patrón que ya usa Sanchopau.
+PLAYER_OAM_BASE = PLATFORM_OAM_BASE + 8
+
+; F5.1b (elenco): Sanchopau, primer personaje del elenco cableado al
+; motor real (Mothman/Abuelito/Diablito/Marcianito ya tienen su CHR
+; generado -- ver tools/gen_cast_sprites.py -- pero no están en ninguna
+; habitación todavía). Metasprite de 32x32 (4x4 tiles, 16 sprites de
+; OAM), ancla física igual que Chiquito: un punto de 8x8 (npc_x/NPC_Y)
+; centrado dentro del arte, que se extiende 12px a cada lado y 24px
+; hacia arriba. Solo aparece en ROOM_CASA (ver update_npc) -- por eso
+; puede usar las subpaletas de sprite 1/2 (enemigo/ítem) sin chocar con
+; ellas: esas solo se usan en ROOM_PRADERA (ver la nota de paleta por
+; habitación en load_room).
+NPC_OAM_BASE = PLAYER_OAM_BASE + 64
+NPC_Y        = 152   ; misma banda de piso que SCENE_CASA_SPAWN_Y (fila 9 del mapa)
+NPC_MIN_X    = 120   ; columnas 7-9 del mapa de casa_pipapita.txt: piso libre,
+NPC_MAX_X    = 150   ; lejos del interruptor (columna 6) y de la puerta bloqueada (columna 10)
+NPC_SPEED_DIVISOR = %00000011   ; se mueve 1px cada 4 frames -- paso tranquilo, no el del jugador
 
 ; Presupuesto de bytes transmitidos por frame hacia el nametable físico
 ; que está fuera de vista (streaming de pantallas, ver
@@ -279,8 +373,14 @@ PAD_RIGHT  = %00000001
 ; entidades real. La plataforma móvil (F4.4) tampoco tiene entrada acá
 ; -- update_platform escribe Y/tile/atributo/X completos desde el
 ; primer frame, no necesita un valor inicial estático.
+; F5.1c: este único sprite inicial (tile 0 = la celda TL de la pose
+; idle, ver chiquito_idle_tile) ahora es solo 1 de las 16 piezas de
+; Chiquito -- las otras 15 quedan ocultas (ya en $FF por el fill de
+; arriba) hasta que @animate corra en el primer ciclo del main loop y
+; dibuje el metasprite completo. Mismo criterio que antes (cuando era
+; 1 de 4 piezas): un placeholder de un solo frame, no una pose real.
 oam_init_data:
-    .byte SCENE_PRADERA_SPAWN_Y, TILE_CHIQUITO_IDLE, %00000000, SCENE_PRADERA_SPAWN_X
+    .byte SCENE_PRADERA_SPAWN_Y, 0, %00000000, SCENE_PRADERA_SPAWN_X
 
 ; Descriptor de cada habitación (F4.3): un registro de ROOM_DESC_SIZE
 ; bytes por habitación, indexado por ROOM_PRADERA/ROOM_CASA*ROOM_DESC_SIZE
@@ -309,14 +409,21 @@ room_descriptors:
     .byte SCENE_CASA_SPAWN_Y
 
 .segment "RODATA"
-; R0,R1: ventanas CHR de 2KB -> banco 0. R2-R5: ventanas CHR de 1KB -> banco 0.
-; Así $0000-$1FFF completo apunta al principio de CHR-ROM, donde está
-; tiles_pradera.s. R6,R7: ventanas PRG swappeables de 8KB ($8000-$9FFF y
+; F5.1b: R0=banco 0, R1=banco 1 (ventanas CHR de 2KB) cubren $0000-$0FFF
+; con los primeros 4KB físicos de CHR-ROM -- ahí vive tiles_pradera.s
+; (fondo). R2-R5=bancos 4-7 (ventanas CHR de 1KB, consecutivos) cubren
+; $1000-$1FFF con los SIGUIENTES 4KB físicos (offset 4096, ver el
+; `.align $1000` antes de tiles_chiquito.s) -- ahí viven los sprites
+; (Chiquito/enemigo/ítem/plataforma/elenco). Antes R0-R5 apuntaban los 6
+; al banco 0, así que fondo y sprites mostraban los mismos bytes físicos
+; y los tiles de sprite necesitaban un +12 artificial para no pisar los
+; de fondo; con esta separación cada pattern table tiene sus propios 256
+; tiles reales. R6,R7: ventanas PRG swappeables de 8KB ($8000-$9FFF y
 ; $A000-$BFFF) -> bancos 0 y 1. Todavía no hay código ni datos ahí
 ; (nuestro código vive en el banco fijo $E000-$FFFF), son solo valores
 ; conocidos para no dejar el mapper en un estado indefinido.
 mmc3_init_values:
-    .byte $00, $00, $00, $00, $00, $00, $00, $01
+    .byte $00, $01, $04, $05, $06, $07, $00, $01
 
 PPU_QUEUE_CAPACITY = 32
 ; Presupuesto de VBlank (estimado, NTSC ~2273 ciclos de CPU disponibles):
@@ -453,6 +560,18 @@ entity_arg_y:    .res 1
 entity_arg_tile: .res 1
 entity_arg_attr: .res 1
 
+; F5.1c: punteros a las tablas de tile/paleta de la pose actual de
+; Chiquito (ver draw_player_metasprite). TIENEN que vivir en zero page:
+; es el único modo de direccionamiento del 6502 que permite leer una
+; tabla cuya dirección se decide en tiempo de ejecución ((ptr),y). Van
+; al FINAL del segmento, no en medio: varios tools/test_*.lua tienen
+; hardcodeadas las direcciones absolutas de las variables de más
+; arriba (posición/velocidad del jugador) -- insertar algo antes las
+; habría corrido todas, rompiendo esos tests (pasó una vez, se corrigió
+; moviendo esto acá).
+chiquito_tile_ptr: .res 2
+chiquito_pal_ptr:  .res 2
+
 .segment "BSS"
 ppu_queue_len:       .res 1
 ppu_queue_overflow:  .res 1                      ; contador de escrituras descartadas por cola llena
@@ -480,6 +599,28 @@ entity_x_hi:   .res MAX_ENTITIES
 entity_y:      .res MAX_ENTITIES
 entity_tile:   .res MAX_ENTITIES
 entity_attr:   .res MAX_ENTITIES
+; F5.1c: Chiquito pasó de 4 piezas desenrolladas a 16 (grilla 4x4,
+; bucle fila/columna, igual patrón que Sanchopau) -- player_frame_tile
+; (un solo tile base) ya no alcanza, reemplazado por player_row/col/
+; row4, que recorren las tablas de pose por índice.
+player_draw_x: .res 1         ; origen X de pantalla del metasprite (hitbox centrado)
+player_draw_y: .res 1         ; origen Y de pantalla del metasprite (24px sobre el hitbox)
+player_row:    .res 1         ; fila 0-3 dentro de la grilla 4x4 (bucle de dibujo)
+player_col:    .res 1         ; columna 0-3 dentro de la grilla 4x4 (bucle de dibujo)
+player_row4:   .res 1         ; player_row*4, recalculado una vez por fila
+
+; F5.1b (NPC Sanchopau). npc_x es posición de PANTALLA, no de mundo --
+; Casa es una sola pantalla fija (room_max_camera=0 ahí), así que no
+; hace falta el par lo/hi de 16 bits que usa el jugador para el nivel
+; con scroll. npc_facing: 0=mirando a la izquierda, 1=a la derecha
+; (mismo criterio que player_facing_right).
+npc_x:          .res 1
+npc_facing:     .res 1
+npc_draw_x:     .res 1   ; origen X de pantalla del metasprite (hitbox centrado)
+npc_draw_y:     .res 1   ; origen Y de pantalla del metasprite (24px sobre el hitbox)
+npc_row:        .res 1   ; fila 0-3 dentro de la grilla 4x4 del metasprite (bucle de dibujo)
+npc_col:        .res 1   ; columna 0-3 dentro de la grilla 4x4 (bucle de dibujo)
+npc_row4:       .res 1   ; npc_row*4, recalculado una vez por fila
 
 .segment "OAM"
 oam_buffer: .res 256  ; página $0200-$02FF, fuente de la OAM DMA ($4014)
@@ -594,13 +735,14 @@ oam_buffer: .res 256  ; página $0200-$02FF, fuente de la OAM DMA ($4014)
     inx
     bne @oam_fill
 
-    ; Copia el sprite de Chiquito al principio del buffer de OAM (F5.1:
-    ; el resto -- entidades y plataforma -- ya no tienen datos
-    ; iniciales estáticos, ver nota de oam_init_data).
+    ; Copia el primer sprite de Chiquito a su bloque de OAM (F5.1c:
+    ; PLAYER_OAM_BASE, ya no el offset 0 -- F5.1: el resto -- entidades
+    ; y plataforma -- ya no tienen datos iniciales estáticos, ver nota
+    ; de oam_init_data).
     ldx #$00
 @oam_copy:
     lda oam_init_data,x
-    sta oam_buffer,x
+    sta oam_buffer+PLAYER_OAM_BASE,x
     inx
     cpx #4
     bne @oam_copy
@@ -677,6 +819,7 @@ mainloop:
     jsr update_camera_and_streaming ; F4.2: cámara + streaming de pantallas
     jsr update_platform      ; F4.4: mueve la plataforma y escribe su OAM
     jsr update_entities      ; F5.1: escribe el OAM de las entidades activas de la habitación actual
+    jsr update_npc           ; F5.1b: patrulla y OAM de Sanchopau (solo visible en Casa)
 
     jmp mainloop
 .endproc
@@ -1610,67 +1753,201 @@ mainloop:
 @skip_recompute:
 
 @animate:
-    ; Tile según el estado. IDLE/JUMP/FALL/HURT/DEAD reutilizan el tile
-    ; idle (sin arte dedicado todavía para salto/caída/daño/muerte);
-    ; WALK alterna con caminar según frame_count (ciclo de caminata);
-    ; ATTACK reutiliza el tile de caminar como diferenciador visual.
+    ; Pose según el estado Y la velocidad real (F5.1c): WALK reparte
+    ; entre caminar (2 cuadros alternados) y correr según
+    ; RUN_SPEED_THRESHOLD -- antes solo había 2 cuadros de caminar, sin
+    ; distinción de velocidad. JUMP y FALL comparten la pose aérea.
+    ; ATTACK conserva temporalmente la pose de contacto hasta que tenga
+    ; su animación dedicada.
     lda player_state
     cmp #STATE_WALK
     beq @anim_walk
+    cmp #STATE_JUMP
+    beq @anim_jump
+    cmp #STATE_FALL
+    beq @anim_jump
     cmp #STATE_ATTACK
     beq @anim_attack
-    lda #TILE_CHIQUITO_IDLE
-    jmp @set_tile
+    lda #POSE_IDLE
+    jmp @draw_pose
 @anim_walk:
+    ; CMP es sin signo: cualquier byte alto no-cero (sea +N o el
+    ; complemento a dos de un negativo) sale >= 1 sin signo, así que
+    ; esto detecta "velocidad horizontal real distinta de cero" sin
+    ; tener que calcular el valor absoluto con signo aparte.
+    lda player_vx_hi
+    cmp #RUN_SPEED_THRESHOLD
+    bcc @anim_walk_slow
+    lda #POSE_RUN
+    jmp @draw_pose
+@anim_walk_slow:
     lda frame_count
     and #%00001000
-    beq @anim_use_idle
-    lda #TILE_CHIQUITO_WALK
-    jmp @set_tile
-@anim_use_idle:
-    lda #TILE_CHIQUITO_IDLE
-    jmp @set_tile
+    beq @anim_walk_contact
+    lda #POSE_WALK2
+    jmp @draw_pose
+@anim_walk_contact:
+    lda #POSE_WALK1
+    jmp @draw_pose
+@anim_jump:
+    lda #POSE_JUMP
+    jmp @draw_pose
 @anim_attack:
-    lda #TILE_CHIQUITO_WALK
-@set_tile:
-    sta oam_buffer+1
+    lda #POSE_WALK1
+@draw_pose:
+    jsr draw_player_metasprite
 
-    ; Flip horizontal según hacia dónde mira (subpaleta 0 = jugador, sin
-    ; otros bits que preservar).
-    lda player_facing_right
-    bne @facing_right
-    lda #%01000000           ; bit6 = flip horizontal
-    jmp @set_attr
-@facing_right:
-    lda #%00000000
-@set_attr:
-    sta oam_buffer+2
-
-    ; Posición real -> OAM. Y no cambia (sin scroll vertical). X es de
-    ; MUNDO (F4.2); el OAM necesita X de PANTALLA, así que se resta la
-    ; cámara -- una resta de 8 bits alcanza porque ambos valores están
-    ; dentro de la misma pantalla visible de 256px (si camera_x está bien
-    ; recortado, player_x_px_lo - camera_x_lo siempre cae en 0-255).
-    lda player_y_hi
-    sta oam_buffer+0
-    lda player_x_px_lo
-    sec
-    sbc camera_x_lo
-    sta oam_buffer+3
-
-    ; Parpadeo durante HURT (invulnerabilidad visual): oculta el sprite
-    ; la mitad de los frames, técnica estándar de NES. Sin esto no habría
-    ; forma de distinguir cuándo sigue invulnerable.
+    ; Parpadeo durante HURT (invulnerabilidad visual): oculta las 16
+    ; piezas la mitad de los frames, técnica estándar de NES.
     lda player_state
     cmp #STATE_HURT
     bne @no_blink
     lda state_timer
     and #%00000100
     bne @no_blink
+    ldx #0
+@blink_hide_loop:
     lda #$FF
-    sta oam_buffer+0         ; Y=$FF: oculta el sprite este frame
+    sta oam_buffer+PLAYER_OAM_BASE,x
+    inx
+    inx
+    inx
+    inx
+    cpx #64
+    bne @blink_hide_loop
 @no_blink:
 
+    rts
+.endproc
+
+; Dibuja la pose 32x32 (grilla 4x4 de tiles 8x8, F5.1c) identificada por
+; POSE_* en A, en la posición real de Chiquito. El punto físico sigue
+; siendo el hitbox 8x8 original: el arte se centra 12px a cada lado y se
+; extiende 24px hacia arriba, por lo que no cambia ninguna colisión ni
+; posición de aparición existente -- mismo criterio que draw_npc_metasprite,
+; con el que comparte estructura (bucle fila/columna en vez de 16
+; bloques desenrollados).
+;
+; A diferencia de Sanchopau (una sola pose, tabla de paleta fija), aquí
+; hay 5 poses con su propio par de tablas (tile absoluto o $FF si la
+; celda no tiene pieza real, y qué subpaleta 0/1 -- ver
+; tools/gen_chiquito_poses.py); por eso el primer paso es cargar los
+; punteros de la pose actual en zero page para poder usar direccionamiento
+; indirecto indexado ((ptr),y), el único modo que da el 6502 para leer
+; una tabla cuya dirección no se conoce hasta tiempo de ejecución.
+.proc draw_player_metasprite
+    tax
+    lda chiquito_pose_tile_lo,x
+    sta chiquito_tile_ptr
+    lda chiquito_pose_tile_hi,x
+    sta chiquito_tile_ptr+1
+    lda chiquito_pose_pal_lo,x
+    sta chiquito_pal_ptr
+    lda chiquito_pose_pal_hi,x
+    sta chiquito_pal_ptr+1
+
+    lda player_x_px_lo
+    sec
+    sbc camera_x_lo
+    sec
+    sbc #12
+    sta player_draw_x
+
+    lda player_y_hi
+    sec
+    sbc #24
+    sta player_draw_y
+
+    lda #0
+    sta player_row
+@row_loop:
+    lda player_row
+    asl a
+    asl a
+    sta player_row4
+
+    lda player_row
+    asl a
+    asl a
+    asl a                    ; ty*8
+    clc
+    adc player_draw_y
+    pha                       ; Y de esta fila, igual para las 4 columnas
+
+    lda #0
+    sta player_col
+@col_loop:
+    lda player_row
+    asl a
+    asl a
+    clc
+    adc player_col
+    asl a
+    asl a
+    tax                       ; X = offset relativo dentro de PLAYER_OAM_BASE
+
+    pla
+    pha
+    sta oam_buffer+PLAYER_OAM_BASE+0,x
+
+    lda player_col
+    asl a
+    asl a
+    asl a                     ; tx*8 -- posición de pantalla, fija pase lo que pase facing
+    clc
+    adc player_draw_x
+    sta oam_buffer+PLAYER_OAM_BASE+3,x
+
+    ; Columna de tile real (facing) -> índice 0-15 en las tablas.
+    lda player_facing_right
+    bne @col_right
+    lda #3
+    sec
+    sbc player_col
+    jmp @have_col
+@col_right:
+    lda player_col
+@have_col:
+    clc
+    adc player_row4
+    tay                       ; Y = índice 0-15, para leer las tablas indirectas
+
+    lda (chiquito_tile_ptr),y
+    cmp #$FF
+    bne @tile_real
+    ; Sin pieza real en esta celda (las poses no siempre llenan las 16):
+    ; oculta solo este sprite, pisando la Y que ya se había escrito.
+    lda #$FF
+    sta oam_buffer+PLAYER_OAM_BASE+0,x
+    jmp @next_col
+@tile_real:
+    sta oam_buffer+PLAYER_OAM_BASE+1,x
+
+    lda (chiquito_pal_ptr),y
+    beq @attr_a
+    lda #%00000011
+    jmp @attr_have
+@attr_a:
+    lda #%00000000
+@attr_have:
+    ldy player_facing_right
+    bne @attr_store
+    ora #%01000000
+@attr_store:
+    sta oam_buffer+PLAYER_OAM_BASE+2,x
+
+@next_col:
+    inc player_col
+    lda player_col
+    cmp #4
+    bne @col_loop
+    pla                        ; descarta la Y de fila que quedó en la pila
+    inc player_row
+    lda player_row
+    cmp #4
+    beq @done                  ; bucle más largo que 127 bytes: branch corto + jmp (patrón ya usado en update_player)
+    jmp @row_loop
+@done:
     rts
 .endproc
 
@@ -1902,6 +2179,69 @@ mainloop:
     lda #1
     sta nt_slot_screens+1
 @skip_screen1:
+
+    ; F5.1b: paleta de sprite por habitación, escritura directa (el
+    ; renderizado sigue apagado en este tramo de load_room, igual que
+    ; los bulk copy de arriba). Los slots 1/2 (enemigo/ítem) solo hacen
+    ; falta en ROOM_PRADERA -- en cualquier otra habitación se prestan a
+    ; Sanchopau. Ver sanchopau_sprite_overlay en src/data/palettes.s.
+    lda room_current
+    cmp #ROOM_CASA
+    beq @sprite_overlay_casa
+    bit $2002
+    lda #$3F
+    sta $2006
+    lda #$15
+    sta $2006
+    lda palette_table+21
+    sta $2007
+    lda palette_table+22
+    sta $2007
+    lda palette_table+23
+    sta $2007
+    bit $2002
+    lda #$3F
+    sta $2006
+    lda #$19
+    sta $2006
+    lda palette_table+25
+    sta $2007
+    lda palette_table+26
+    sta $2007
+    lda palette_table+27
+    sta $2007
+    jmp @sprite_overlay_done
+@sprite_overlay_casa:
+    bit $2002
+    lda #$3F
+    sta $2006
+    lda #$15
+    sta $2006
+    lda sanchopau_sprite_overlay+0
+    sta $2007
+    lda sanchopau_sprite_overlay+1
+    sta $2007
+    lda sanchopau_sprite_overlay+2
+    sta $2007
+    bit $2002
+    lda #$3F
+    sta $2006
+    lda #$19
+    sta $2006
+    lda sanchopau_sprite_overlay+3
+    sta $2007
+    lda sanchopau_sprite_overlay+4
+    sta $2007
+    lda sanchopau_sprite_overlay+5
+    sta $2007
+    ; Reaparece a Sanchopau en su punto de partida cada vez que se
+    ; (re)entra a Casa -- igual criterio que el resto de load_room, que
+    ; siempre deja la habitación en un estado inicial predecible.
+    lda #NPC_MIN_X
+    sta npc_x
+    lda #1
+    sta npc_facing
+@sprite_overlay_done:
 
     bit $2002
     lda #$00
@@ -2240,6 +2580,167 @@ mainloop:
     inx
     cpx #MAX_ENTITIES
     bne @loop
+    rts
+.endproc
+
+; F5.1b: patrulla de Sanchopau (NPC, no jugador -- sin física real, solo
+; rebota entre NPC_MIN_X/NPC_MAX_X) y pose según si se está moviendo.
+; Llamado una vez por frame desde el main loop, después de
+; update_entities. Solo visible en ROOM_CASA; en cualquier otra
+; habitación solo oculta su OAM y sale.
+.proc update_npc
+    lda room_current
+    cmp #ROOM_CASA
+    beq @active
+    ; Oculta los 16 sprites (4x4), no solo los 4 de la primera fila --
+    ; el Y de cada uno vive en el primer byte de su bloque de 4
+    ; (offsets 0,4,8,...,60 dentro de NPC_OAM_BASE).
+    ldx #0
+@hide_loop:
+    lda #$FF
+    sta oam_buffer+NPC_OAM_BASE,x
+    inx
+    inx
+    inx
+    inx
+    cpx #64
+    bne @hide_loop
+    rts
+
+@active:
+    lda frame_count
+    and #NPC_SPEED_DIVISOR
+    bne @skip_move
+    lda npc_facing
+    bne @move_right
+@move_left:
+    dec npc_x
+    lda npc_x
+    cmp #NPC_MIN_X
+    bcs @skip_move
+    lda #1
+    sta npc_facing
+    jmp @skip_move
+@move_right:
+    inc npc_x
+    lda npc_x
+    cmp #NPC_MAX_X
+    bcc @skip_move
+    lda #0
+    sta npc_facing
+@skip_move:
+
+    ; Pose única (ver nota de TILE_SANCHOPAU_BASE): se desliza sin
+    ; animar las piernas, no hay caminar/salto dibujados todavía.
+    jsr draw_npc_metasprite
+    rts
+.endproc
+
+; Dibuja a Sanchopau (grilla 4x4 de tiles 8x8, TILE_SANCHOPAU_BASE) en
+; npc_x/NPC_Y. Recorre las 16 piezas con un bucle (fila/columna) en vez
+; de 16 bloques de código desenrollados: a diferencia de Chiquito (4
+; piezas, sí desenrollado en draw_player_metasprite), aquí el código
+; desenrollado sería demasiado largo para el beneficio.
+; Paleta por TILE, no por mitad (a diferencia de Chiquito): el parche
+; naranja de Sanchopau no cae ordenadamente en una mitad superior/
+; inferior, así que cada uno de los 16 tiles consulta
+; sanchopau_tile_palette (ver palettes.s) con su propio índice. Igual
+; que con Chiquito, la posición de cada columna en PANTALLA no cambia
+; con la dirección; lo que cambia es qué columna de tile (y qué
+; subpaleta, ya que viaja con el tile) se dibuja ahí, para que el
+; metasprite completo se vea reflejado en vez de desplazado.
+.proc draw_npc_metasprite
+
+    lda npc_x
+    sec
+    sbc camera_x_lo
+    sec
+    sbc #12
+    sta npc_draw_x
+
+    lda #NPC_Y
+    sec
+    sbc #24
+    sta npc_draw_y
+
+    lda #0
+    sta npc_row
+@row_loop:
+    lda npc_row
+    asl a
+    asl a
+    sta npc_row4
+
+    lda npc_row
+    asl a
+    asl a
+    asl a                   ; ty*8
+    clc
+    adc npc_draw_y
+    pha                      ; Y de esta fila, igual para las 4 columnas
+
+    lda #0
+    sta npc_col
+@col_loop:
+    lda npc_row
+    asl a
+    asl a
+    clc
+    adc npc_col
+    asl a
+    asl a
+    tax                      ; X = offset relativo dentro del bloque NPC_OAM_BASE
+
+    pla
+    pha
+    sta oam_buffer+NPC_OAM_BASE+0,x
+
+    lda npc_col
+    asl a
+    asl a
+    asl a                    ; tx*8 -- posición de pantalla, fija pase lo que pase facing
+    clc
+    adc npc_draw_x
+    sta oam_buffer+NPC_OAM_BASE+3,x
+
+    lda npc_facing
+    bne @col_right
+    lda #3
+    sec
+    sbc npc_col
+    jmp @have_col
+@col_right:
+    lda npc_col
+@have_col:
+    clc
+    adc npc_row4             ; A = índice de tile 0-15 (ty*4+columna de tile)
+    tay                      ; Y = ese índice, para leer sanchopau_tile_palette más abajo
+    clc
+    adc #TILE_SANCHOPAU_BASE
+    sta oam_buffer+NPC_OAM_BASE+1,x
+
+    lda sanchopau_tile_palette,y
+    beq @attr_top
+    lda #%00000010
+    jmp @attr_have
+@attr_top:
+    lda #%00000001
+@attr_have:
+    ldy npc_facing
+    bne @attr_store
+    ora #%01000000
+@attr_store:
+    sta oam_buffer+NPC_OAM_BASE+2,x
+
+    inc npc_col
+    lda npc_col
+    cmp #4
+    bne @col_loop
+    pla                       ; descarta la Y de fila que quedó en la pila
+    inc npc_row
+    lda npc_row
+    cmp #4
+    bne @row_loop
     rts
 .endproc
 

@@ -25,7 +25,10 @@ local ENTITY_OAM_BASE = 4
 
 local ROOM_PRADERA, ROOM_CASA = 0, 1
 local ENTITY_TYPE_ENEMY, ENTITY_TYPE_ITEM = 0, 1
-local TILE_ENEMY, TILE_ITEM = 10, 11
+-- F5.1c: Chiquito pasó de 16 a 75 tiles (5 poses reales, conversión
+-- fiel del concept art), corriendo estos índices otra vez -- ver
+-- TILE_ENEMY/TILE_ITEM en src/main.s.
+local TILE_ENEMY, TILE_ITEM = 75, 76
 
 local out = io.open("/tmp/fceux_test_entities.txt", "w")
 local function log(line)

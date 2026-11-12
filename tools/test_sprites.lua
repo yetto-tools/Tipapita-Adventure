@@ -44,15 +44,23 @@ for i = 1, 100 do
 	end
 end
 
-local tile_idle = memory.readbyte(0x0201) -- oam_buffer+1, en reposo
+-- F5.1c: Chiquito ya no es 4 piezas en oam_buffer+0.. -- es un bloque
+-- propio de 16 (PLAYER_OAM_BASE=44 en main.s); el tile de la celda TL
+-- (esquina superior-izquierda de la grilla 4x4) vive en +1 de ese
+-- bloque, igual idea que antes solo que con el offset nuevo.
+local PLAYER_TL_TILE = 0x0200 + 44 + 1
 
--- Camina a la derecha: la animación debe alternar idle/caminar.
+local tile_idle = memory.readbyte(PLAYER_TL_TILE) -- en reposo
+
+-- Camina a la derecha: la animación debe alternar entre poses reales
+-- (caminar/correr, F5.1c) según la velocidad -- ya no son solo 2
+-- cuadros fijos.
 local saw_walk_tile = false
 local tile_walking
 for _ = 1, 30 do
 	joypad.set(1, { right = true })
 	emu.frameadvance()
-	tile_walking = memory.readbyte(0x0201)
+	tile_walking = memory.readbyte(PLAYER_TL_TILE)
 	if tile_walking ~= tile_idle then saw_walk_tile = true end
 end
 
@@ -74,18 +82,20 @@ local px_world, py = memory.readbyte(X_HI), memory.readbyte(Y_HI)
 local px = (px_world - camera_lo) % 256
 local enemy_px = (180 - camera_lo) % 256
 local item_px = (140 - camera_lo) % 256
-local cr, cg, cb = sample("chiquito", px + 4, py + 4)
-local er, eg, eb = sample("enemigo", enemy_px + 4, 184)
-local ir_, ig, ib = sample("item", item_px + 4, 104)
+-- F5.1c: Chiquito ahora es un metasprite 32x32 (conversión fiel del
+-- concept art, ya no 16x16 dibujado a mano) centrado sobre el mismo
+-- hitbox 8x8 de siempre: origen visual=(px-12, py-24). (+15,+17) desde
+-- ese origen cae en el pelaje (índice de color real, no transparente)
+-- tanto en reposo como corriendo -- confirmado a mano contra capturas
+-- reales de FCEUX en ambas poses antes de fijar este punto.
+local cr, cg, cb = sample("chiquito", px + 15, py - 24 + 17)
+local er, eg, eb = sample("enemigo", enemy_px + 1, 181)
+local ir_, ig, ib = sample("item", item_px + 3, 102)
 
--- Puntos de "oreja/contorno" (índice de color 1, no 2): a diferencia del
--- índice 2 -- que por coincidencia vale $16 en ambas subpaletas-- el
--- índice 1 sí distingue jugador ($27, tan) de enemigo ($06, rojo
--- oscuro). Confirma que la subpaleta de sprite seleccionada por
--- atributo realmente aplica.
-local cor, cog, cob = sample("chiquito_oreja", px + 1, py + 1)
-local eor, eog, eob = sample("enemigo_oreja", enemy_px + 1, 181)
-local subpalette_differs = not (cor == eor and cog == eog and cob == eob)
+-- Confirma que la subpaleta de sprite seleccionada por atributo
+-- realmente aplica: el pelaje de Chiquito y el cuerpo del enemigo usan
+-- subpaletas distintas, así que sus colores reales deben diferir.
+local subpalette_differs = not (cr == er and cg == eg and cb == eb)
 
 local sprites_distinct_from_bg = not is_blue_sky(cr, cg, cb) and not is_green_ground(cr, cg, cb)
 	and not is_blue_sky(er, eg, eb) and not is_green_ground(er, eg, eb)

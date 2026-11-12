@@ -498,14 +498,31 @@ aprobación de premisa, pilares y alcance.
 - Resultados observados: `RESULT=PASS` en las 14 pruebas de FCEUX y en `test_map2scene.py`. Revisión visual real en FCEUX (capturas tomadas con el emulador corriendo) confirma las 5 poses reales, el reflejo al mirar a la izquierda, y el salto completo (arco en el aire, patas hacia atrás) -- todo contra la ROM compilada, no simulado.
 - Limitaciones pendientes: los otros 3 tiles de escenario (enemigo/ítem/plataforma) siguen siendo pixel art a mano sin referencia real (`tools/gen_scenery_sprites.py`), no tocados en esta tarea. El patrullaje/animación del resto del elenco (Mothman/Abuelito/Diablito/Marcianito) sigue pendiente de habitación propia. No probado en hardware real.
 
-## F5.2 Enemigos básicos [P1]
-- [ ] Enemigo patrullero.
-- [ ] Enemigo perseguidor o saltador.
-- [ ] Enemigo de ataque a distancia.
-- [ ] Daño y colisiones.
-- [ ] Desaparición/reaparición según reglas.
+## F5.2 Enemigos básicos [P1] — Implementada, compilada, probada en emulador (2026-11-12)
+- [x] Enemigo patrullero.
+- [x] Enemigo perseguidor o saltador.
+- [x] Enemigo de ataque a distancia.
+- [x] Daño y colisiones.
+- [x] Desaparición/reaparición según reglas.
 
 **Aceptación:** comportamientos distintos y reproducibles.
+
+**Registro de la tarea:**
+- Archivos: `src/main.s` (constantes `ENEMY_*`/`PROJECTILE_*`, `ENTITY_TYPE_PROJECTILE`, campos `entity_behavior`/`entity_dir`/`entity_timer` en BSS, `entity_arg_behavior`/`dir`/`timer` + escratch `enemy_dx_lo`/`hi`/`enemy_hop_tmp`/`enemy_save_x` en ZEROPAGE -- todos al final de sus segmentos, mismo criterio que `chiquito_tile_ptr`, para no correr las direcciones que ya tienen hardcodeadas varios `tools/test_*.lua`; `spawn_entity` extendido; 3 spawns nuevos/ajustados en `load_room`; `compute_entity_dx`, `enter_hurt_state` -factorizado de `update_player`-, `check_enemy_contact`, `update_enemies`, `enemy_patrol_step`, `enemy_chaser_step`, `enemy_ranged_step`, `projectile_step`; tabla `enemy_hop_offset`; 2 líneas nuevas en `mainloop`), `tools/test_entities.lua` (conteo/Y ajustados), `tools/test_state_machine.lua` (aísla la prueba de muerte de los enemigos nuevos), `tools/test_enemies.lua` (nuevo), `Makefile` (`enemies` agregado a `FCEUX_TESTS`).
+- **Diseño (reusa F5.1, no un sistema aparte):** los 3 comportamientos son sub-tipos de `entity_type=ENEMY` (`entity_behavior`: patrullero/perseguidor/atacante), y el proyectil del atacante a distancia es simplemente una ENTIDAD más (`ENTITY_TYPE_PROJECTILE`) -- reusa el límite de 8, el spawn/destroy por zona y el dibujado genérico de `update_entities` ya existentes, sin una tabla ni un límite aparte. `update_enemies` (nuevo, corre ANTES de `update_entities` en el main loop) es la única rutina que mueve/anima: `update_entities` sigue siendo puramente "dibuja lo que hay en la tabla".
+- **3 ejemplos hardcodeados, no un editor genérico de enemigos** -- mismo criterio que `PLATFORM_MIN_X/MAX_X` o `NPC_MIN_X/MAX_X`: patrullero (pantalla 0, rebota 160-200px), perseguidor/saltador y atacante a distancia (pantalla 1, piso corrido sin huecos ni peligros). Todos reusan `TILE_ENEMY` (el mismo placeholder geométrico de F2.3) -- **sin arte real distinto por comportamiento todavía**, ver limitaciones.
+- **Perseguidor/saltador:** persigue a Chiquito en X de verdad (1px/frame hacia la posición real del jugador, no un rango fijo) y se detiene a `ENEMY_CHASER_STOP_DISTANCE` (12px) de distancia; agrega un salto VISUAL (offset de Y leído de `enemy_hop_offset`, una tabla de 16 bytes) en vez de deslizarse, para que sea un comportamiento realmente distinto del patrullero -- no hay gravedad/colisión de entidad real por detrás del salto.
+- **Atacante a distancia:** dispara un proyectil horizontal (`ENTITY_TYPE_PROJECTILE`) hacia el lado donde esté Chiquito en el instante del disparo (no vuelve a apuntar después) cada 90 frames; el proyectil viaja a 2px/frame y se desactiva solo a los 60 frames (no por salir de pantalla) -- la regla de aparición/desaparición pedida explícitamente por esta fase. El atacante dispara otro al terminar su cooldown; no es el MISMO proyectil reapareciendo, pero cumple la regla igual que hace `destroy_entities_in_room`/`spawn_entity` con las entidades por habitación desde F5.1.
+- **Daño y colisiones (un solo sentido):** `check_enemy_contact` (nuevo, corre después de `update_enemies`) hace un AABB simple de 8x8 entre Chiquito y cada enemigo/proyectil activo de la habitación actual; al primer contacte, entra en HURT con el mismo knockback que un peligro de tile -- se factorizó ese bloque de `update_player` a `enter_hurt_state` para no duplicarlo. El jugador NO puede dañar a los enemigos todavía (no hay arma real, eso es F5.3) -- un proyectil sí se consume (se desactiva) al pegarle a Chiquito.
+- **Bug real encontrado y corregido (geometría, no solo código):** el enemigo/ítem de prueba de F2.3 usaba Y=179 como posición puramente decorativa (sin colisión real contra nada hasta ahora); al darle contacto real con el jugador en esta fase, 179 resultó estar 27px más abajo de donde el jugador puede pararse de pie en esta misma fila de piso (152 = 160 del tope del suelo - 8 del hitbox, igual que `SCENE_PRADERA_SPAWN_Y`) -- un enemigo "parado en el piso" nunca llegaba a tocarse con el jugador en juego normal. Corregido a 152 en los 3 enemigos nuevos/existente (el ítem, sin colisión, se deja en 99 sin cambios). Encontrado con `tools/test_enemies.lua` (el contacto solo se disparaba transportando al jugador DENTRO del piso sólido, nunca caminando).
+- **Bug real encontrado y corregido (umbral compartido):** el perseguidor originalmente dejaba de acercarse a la misma distancia (`ENTITY_HITBOX_W`=8) que usa `check_enemy_contact` para considerar "contacto" -- quedaba parado justo en el borde del hitbox del jugador, y en cuanto terminaba la invulnerabilidad de HURT el contacto se disparaba de nuevo de inmediato. Corregido con `ENEMY_CHASER_STOP_DISTANCE`=12 (>8), para que el perseguidor quede parado claramente afuera del rango de daño real.
+- **Bug real encontrado y corregido (branch fuera de rango):** `ca65` rechazó `bne @no_entities` en `load_room` ("Range error") tras agregar los 2 spawns nuevos -- el bloque de spawns de pradera ya es más largo que 127 bytes. Corregido con el mismo patrón que ya usa el archivo (branch corto invertido + `jmp` sin límite de rango).
+- **Bug real encontrado y corregido (interacción entre pruebas):** con el perseguidor y el atacante activos desde que carga pradera, `tools/test_state_machine.lua` empezó a fallar en su prueba de muerte por caída -- el perseguidor alcanzaba a Chiquito mientras caía por el hueco y el knockback lo sacaba antes de llegar a DEAD. Esa prueba es de la máquina de estados (F3.4), no de combate; se corrigió desactivando todas las entidades al principio (mismo criterio que ya usaba esa prueba para aislar la muerte del peligro de tile).
+- Comando de build: `make rom` (WSL Ubuntu, toolchain de F0.1).
+- Resultado de compilación: éxito (mismos 3 warnings de alineación de `CHARS` ya documentados y esperados desde F5.1b).
+- Pruebas ejecutadas: las 14 pruebas de FCEUX existentes (con `test_entities.lua`/`test_state_machine.lua` corregidos arriba) + la nueva `tools/test_enemies.lua` + `tools/test_map2scene.py`.
+- Resultados observados: `RESULT=PASS` en las 15 pruebas de FCEUX y en `test_map2scene.py`. `test_enemies.lua` verifica, contra la ROM real: el patrullero se mueve y se mantiene dentro de 160-200px (mínimo/máximo sobre 90 muestras, no 2 puntos sueltos -- un primer intento con solo 2 muestras separadas por 60 frames dio un falso negativo real, por una coincidencia aritmética del rebote, ver el bug de umbral compartido arriba para el patrón de depuración); el perseguidor cierra una distancia real (de 75px a 11px) y su Y cambia de verdad (salto visual); el atacante dispara un proyectil real (nueva entidad `PROYECTIL` activa) y ese proyectil se desactiva solo sin que el jugador lo toque; tocar al patrullero (con el resto de entidades desactivadas para aislar la prueba) pone a Chiquito en HURT. No se hizo revisión visual en FCEUX con ventana (ver restricción del usuario sobre no abrir ventanas de FCEUX durante uso de laptop) -- toda la evidencia es de `make test` (xvfb, sin ventana) más las aserciones de memoria de los Lua.
+- Limitaciones pendientes: los 3 comportamientos reusan el mismo tile placeholder geométrico de F2.3 (`TILE_ENEMY`) -- visualmente indistinguibles entre sí hasta que exista arte real por tipo de enemigo (ver la tarea en curso delegada a Codex sobre animación/arte de enemigos). El perseguidor y el atacante solo existen en pradera, pantalla 1; ningún enemigo usa colisión contra tiles para su propio movimiento (el patrullero usa un rango fijo, no detección de pared/borde); el proyectil del atacante no colisiona contra tiles sólidos (atraviesa paredes) ni contra el jugador más de una vez (se consume al primer contacto, pero tampoco hay forma de que el jugador lo destruya). El jugador no puede dañar a ningún enemigo todavía (F5.3). No probado en hardware real.
 
 ## F5.3 Armas y proyectiles [P2]
 - [ ] Definir sistema de ataque.
@@ -638,3 +655,13 @@ Para cada tarea completada añadir:
 - emulador/hardware utilizado;
 - pruebas ejecutadas;
 - problemas pendientes.
+
+### Registro de arte del taller (2026-11-12)
+
+Se generaron 12 tiles originales de interior y su preview con
+`tools/gen_taller_tiles.py`; `png2chr.py` los convirtió correctamente en Python
+local. WSL devolvió `Wsl/Service/CreateInstance/E_ACCESSDENIED` en este entorno.
+Sin integración de habitación ni pruebas de ROM para este asset. El ensayo de
+conversión nativa de las cinco poses de Chiquito no produjo los mismos bytes;
+el pipeline existente y los sprites permanecen sin cambios. Detalle, paleta y
+comandos en `assets/ASSET_MANIFEST.md`, sección de tiles del taller.

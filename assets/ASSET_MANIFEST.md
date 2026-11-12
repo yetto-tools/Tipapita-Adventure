@@ -1,5 +1,56 @@
 # Manifiesto de assets NES
 
+## Auditoría de referencias y bloqueo de conversión nativa — 2026-11-12
+
+Se inspeccionaron completas las siete hojas individuales de `referencias/personajes/`,
+`referencias/estilo/elenco_estilo_turquesa.png` y todos los PNG de
+`assets/concepts/`. La afirmación anterior de que las hojas del elenco carecían
+de caminar/salto era incorrecta: solo se había convertido una pose por personaje.
+Los recortes existentes no prueban que las demás poses estén listas para NES.
+
+| Referencia | Cuadros adicionales visibles / estado |
+|---|---|
+| Chiquito, hoja turquesa | Más idle, caminar, correr, salto y acciones, incluyendo recoger. El concepto 01 anterior también tiene dormir y otras acciones, pero es una versión visual anterior sin sombrero. |
+| Sanchopau, elenco y concepto 01 | Caminar, correr, salto y expresión; en el concepto 01 hay una pose con herramienta. Fase C: caminar y construir siguen sin conversión validada; construir como secuencia necesita cuadros adicionales o confirmar que la pose con herramienta representa esa acción. |
+| Mothman, elenco y concepto 01 | Caminar y vuelo; el concepto 01 presenta aleteo, interactuar, aparecer y proteger. Fase C: aletear, vuelo y proteger siguen sin conversión validada. |
+| Marcianitos, elenco y concepto 01 | Caminar, saltar y expresión; la hoja 01 muestra otras variantes y acciones de hablar/saludar/analizar/comerciar. Fase C: caminar e interactuar siguen sin conversión validada. Las variantes no son necesariamente el mismo diseño verde de la hoja de elenco. |
+| Diablito, hoja individual | Caminar, correr, saltar y pose de fuego. Fase C: caminar y salto sin conversión validada; fuego también, y la habilidad requiere confirmación. |
+| Abuelito, hoja individual | Caminar, correr, movimientos con machete y una pose con maíz. Fase C: caminar, cosechar y machete sin conversión validada; la pose con maíz no demuestra por sí sola un ciclo de cosecha. |
+| Abuelita y hermanos | No hay hojas individuales finales; concepto y poses Fase C pendientes. |
+| Roedor, carnero, erizo, ave y roca | Una figura de cada uno en `objetos_criaturas_montana_v1.png`; no hay cuadros adicionales identificables de movimiento, ataque ni daño. Se necesitan referencias para esos estados antes de convertirlos. |
+| Seis objetos | Maíz, metal, comida, frasco, llave y resorte aparecen una vez cada uno; no se detectaron secuencias de animación en esa hoja. |
+
+**Restricción detectada:** `tools/convert_reference_sprites.py` usa
+`thumbnail(..., Image.Resampling.LANCZOS)`. Por tanto, aunque es el pipeline
+existente, no satisface la prohibición expresa de redimensionar de este pase.
+Se ensayaron recortes literales sin escala y cuantización por tile con las
+paletas declaradas: por ejemplo, un recorte de caminar de Sanchopau ocupó
+152×152 píxeles y 275 tiles no vacíos, frente a una tabla visible de 256 tiles
+y el límite de 64 sprites OAM. Además, algunos recortes de ensayo cortaron
+siluetas y la máscara turquesa afectó verdes del Marcianito. Se descartaron los
+resultados experimentales; no son assets jugables ni reemplazan los existentes.
+Hay que resolver cómo obtener cuadros NES nativos sin reescalar ni redibujar y
+preservar transparencia y siluetas antes de entregar conversiones nuevas.
+
+**Escenarios:** `assets/concepts/propuesta_elenco_escena_v1.png` muestra el
+exterior de un taller con techo, engranaje, herramientas y mesa; no es un plano
+ni una hoja de metatiles del interior. `montanas_rich_background_reference_v1.png`
+muestra montañas y cultivos; `objetos_criaturas_montana_v1.png` incluye una
+pequeña muestra de cueva, no un escenario completo. No se encontró referencia
+específica de zona extraterrestre ni una hoja de interior del taller. No se
+entregó tileset nuevo: convertir fielmente el exterior sin escala no resuelve
+por sí solo el interior ni las restricciones de atributos de 16×16. Quedan
+pendientes también campos de maíz y ríos como escenarios propios.
+
+**Validación de este pase:** se intentó `wsl.exe -e bash -lc "cd
+/mnt/c/Users/erashon/umg/nes-advance && make rom"`; WSL respondió
+`Wsl/Service/CreateInstance/E_ACCESSDENIED` (entorno de Codex sin acceso a
+WSL -- distinto del entorno de Claude Code usado para el resto de esta
+sesión, donde WSL sí está disponible). No se ejecutaron `make test`,
+emulador ni hardware, y no hay CHR nuevo declarado listo. Archivos
+modificados por este pase: `assets/ASSET_MANIFEST.md` (este bloque). El
+cambio reportado en `TASKS.md` no llegó a aplicarse en el working tree real.
+
 ## Chiquito (F5.1c) — 2026-11-12
 
 Las 5 poses reales del protagonista (conversión fiel del concept art,
@@ -160,3 +211,48 @@ make -B rom
 Los archivos v1 se conservan como historial. El pase v2 es técnicamente jugable
 y verificable, pero sigue sujeto a revisión
 visual antes de declararse arte final.
+
+## Tiles originales del interior del taller — 2026-11-12
+
+Se dibujó pixel art original para el interior del taller de Sanchopau, inventor
+que fabrica máquinas; no se convirtió la referencia del exterior ni se alteró
+la identidad de ningún personaje. Es una hoja modular, sin animación ni mapa.
+
+- Generador: `tools/gen_taller_tiles.py`; entrada para conversión:
+  `assets/tiles/taller_v1.png` (96×8, 12 tiles de 8×8); vista ampliada 8×:
+  `assets/tiles/taller_v1_preview.png`.
+- Orden: 0 pared, 1 viga (silueta distante); 2 tablero, 3 llave,
+  4 engranaje, 5 estante con pieza (decoración media); 6 borde de mesa,
+  7 cuerpo de mesa, 8 pata, 9 borde de piso, 10 piso y 11 caja/panel
+  (primer plano). El borde continuo del piso separa visualmente la superficie
+  sólida; la colisión real deberá asignarse en el futuro mapa.
+- La hoja técnica usa los cuatro marcadores globales de `png2chr.py`; la
+  vista los presenta con una sola subpaleta NES propuesta `$0F, $17, $27,
+  $38` (negro, marrón, naranja y crema; RGB aproximado 2C02), compartida por
+  todos los tiles. Así las piezas entre sí no requieren cambios de atributo;
+  la composición con otros assets todavía debe respetar atributos de 16×16.
+- Generación y validación reales en Windows: `python tools/gen_taller_tiles.py`
+  y `python tools/png2chr.py assets/tiles/taller_v1.png dist/tiles_taller.s
+  --label tiles_taller`. Resultado: `OK: dist/tiles_taller.s (12 tiles desde
+  assets/tiles/taller_v1.png)`, código 0. `dist/tiles_taller.s` es salida de
+  prueba, no está integrada a la ROM. Se intentó ejecutar generación y
+  conversión mediante `wsl.exe -e bash -lc` en este entorno, pero WSL devolvió
+  `Wsl/Service/CreateInstance/E_ACCESSDENIED`; no se afirma validación en WSL.
+- Limitaciones: arte sin revisar dentro de una habitación, sin metatiles,
+  atributos, paleta cargada ni colisiones integradas; no se ejecutó ROM,
+  emulador ni hardware para este asset.
+
+### Conversión nativa de referencias: ensayo, no reemplazo
+
+El conversor existente usa `thumbnail(..., LANCZOS)` antes de cuantizar. Se
+ensayó en memoria una alternativa que conserva el recorte completo a escala
+nativa, elimina el fondo con la misma máscara y cuantiza cada tile de 8×8 con
+las mismas paletas, rellenando transparentemente los bordes parciales. Los
+bytes nativos frente a los actuales fueron: idle 4960/224, caminar 1
+4432/256, caminar 2 4400/240, correr 4144/240 y saltar 4080/240; ninguno
+coincidió. Los recortes originales miden aproximadamente 146×153–164, no
+32×32: conservar sus píxeles produce muchos más tiles que la versión reducida.
+El ensayo no demuestra una conversión jugable ni compatibilidad OAM/CHR. No se
+modificó `tools/convert_reference_sprites.py` ni los assets de personajes;
+queda pendiente definir fuentes nativas adecuadas y un pipeline que no reduzca
+ni corte la silueta antes de convertir personajes nuevos.
